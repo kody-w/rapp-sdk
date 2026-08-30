@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rapp-sdk"
+version = "0.1.0"
+description = "Protocol and specification-chain primitives for RAPP SDK clients"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Kody Wildfeuer" }]
+keywords = ["agents", "protocol", "rapp", "sdk"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/kody-w/rapp-sdk"
+Documentation = "https://github.com/kody-w/rapp-sdk/blob/main/docs/spec-chain.md"
+Repository = "https://github.com/kody-w/rapp-sdk"
+Issues = "https://github.com/kody-w/rapp-sdk/issues"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.data-files]
+"share/rapp-sdk" = ["DISCLAIMER.md"]
+"share/rapp-sdk/docs" = ["docs/spec-chain.md"]
+"share/rapp-sdk/schemas" = ["schemas/rapp-spec-revision-v1.schema.json"]

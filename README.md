@@ -1,4 +1,4 @@
-# RAPP Sdk
+# RAPP SDK
 
 > The RAPP SDK is the developer surface for building agents, twins, and integrations on the RAPP platform.
 
@@ -15,6 +15,25 @@ Explore the ecosystem: [Installer](https://github.com/kody-w/rapp-installer) ·
 ## Status
 
 Early, and actively being built out. Interfaces will move.
+
+## Protocol foundation
+
+The first public package surface is a Python 3.11+, standard-library-only core
+for strict RAPP/1 frames and append-only specification chains:
+
+```python
+from rapp_sdk import SpecChain, build_spec_revision_frame, verify_stream
+
+chain = SpecChain.load("anchor/chain.jsonl")
+selected = chain.resolve("head")
+normative_bytes = chain.materialize(frame_hash=selected.frame_hash)
+```
+
+It provides strict I-JSON parsing, authority-compatible canonicalization,
+domain-separated `H`/`Hb`, exact eleven-key frame construction and
+verification, immutable historical specification resolution, and a
+checksum-revalidating content-addressed cache. See
+[`docs/spec-chain.md`](docs/spec-chain.md).
 
 ## License
 

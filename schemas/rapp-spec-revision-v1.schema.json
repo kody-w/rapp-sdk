@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/kody-w/rapp-sdk/raw/main/schemas/rapp-spec-revision-v1.schema.json",
+  "title": "RAPP specification revision payload profile",
+  "description": "Payload profile carried by a RAPP/1 frame. The eleven-key RAPP/1 envelope is intentionally not redefined here.",
+  "type": "object",
+  "required": [
+    "revision"
+  ],
+  "properties": {
+    "revision": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "canonical_repo": {
+      "type": "string",
+      "pattern": "^https://github\\.com/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/(?![A-Za-z0-9_.-]*\\.git$)[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "normative_path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*[\\\\%?#]).+$"
+    },
+    "normative_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "normative_bytes": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1048576
+        }
+      ]
+    },
+    "normative": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "media_type",
+        "text",
+        "sha256",
+        "bytes"
+      ],
+      "properties": {
+        "media_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 127,
+          "pattern": "^[ -~]+$"
+        },
+        "text": {
+          "type": "string"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1048576
+        }
+      }
+    }
+  },
+  "anyOf": [
+    {
+      "required": [
+        "normative"
+      ]
+    },
+    {
+      "required": [
+        "canonical_repo",
+        "commit",
+        "normative_path",
+        "normative_sha256",
+        "normative_bytes"
+      ]
+    }
+  ],
+  "dependentRequired": {
+    "canonical_repo": [
+      "commit",
+      "normative_path",
+      "normative_sha256",
+      "normative_bytes"
+    ],
+    "commit": [
+      "canonical_repo",
+      "normative_path",
+      "normative_sha256",
+      "normative_bytes"
+    ],
+    "normative_path": [
+      "canonical_repo",
+      "commit",
+      "normative_sha256",
+      "normative_bytes"
+    ],
+    "normative_sha256": [
+      "canonical_repo",
+      "commit",
+      "normative_path",
+      "normative_bytes"
+    ],
+    "normative_bytes": [
+      "canonical_repo",
+      "commit",
+      "normative_path",
+      "normative_sha256"
+    ]
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}
