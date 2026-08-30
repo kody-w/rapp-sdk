@@ -3,10 +3,9 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-import os
-import subprocess
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from rapp_sdk import (
     CacheIntegrityError,
@@ -21,6 +20,12 @@ from rapp_sdk import (
     WAVE_SPACE,
     build_spec_revision_frame,
     canonicalize,
+)
+from tests.authority_fixture import (
+    PINNED_AUTHORITY_COMMIT,
+    PINNED_CHAIN_SHA256,
+    PINNED_SPEC_SHA256,
+    pinned_fixture,
 )
 
 STREAM_ID = (
@@ -290,9 +295,10 @@ class SpecChainTests(unittest.TestCase):
             )
 
 
-class LocalGitSource:
-    def __init__(self, root: Path):
-        self.root = root
+class PinnedFixtureSource:
+    def __init__(self, content: bytes):
+        self.content = content
+        self.calls: list[tuple[str, str, str, int]] = []
 
     def fetch(
         self,
@@ -302,34 +308,69 @@ class LocalGitSource:
         *,
         max_bytes: int,
     ) -> bytes:
-        result = subprocess.run(
-            ["git", "-C", str(self.root), "show", f"{commit}:{path}"],
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        if len(result.stdout) > max_bytes:
-            raise AssertionError("local immutable object exceeded declared limit")
-        return result.stdout
+        self.calls.append((repository, commit, path, max_bytes))
+        if repository != "https://github.com/kody-w/rapp-1":
+            raise AssertionError("fixture source received the wrong repository")
+        if commit != "5e30f66396f4cd125bce5718b1fef92d8d3ddab8":
+            raise AssertionError("fixture source received a mutable or wrong commit")
+        if path != "SPEC.md" or max_bytes != 65569:
+            raise AssertionError("fixture source received the wrong path or byte cap")
+        return self.content
 
 
-class CurrentAuthorityCompatibilityTests(unittest.TestCase):
-    @unittest.skipUnless(
-        os.environ.get("RAPP1_AUTHORITY_ROOT"),
-        "set RAPP1_AUTHORITY_ROOT to run immutable authority compatibility",
-    )
-    def test_current_authority_chain_and_spec(self) -> None:
-        root = Path(os.environ["RAPP1_AUTHORITY_ROOT"])
-        authority_commit = subprocess.check_output(
-            ["git", "-C", str(root), "rev-parse", "HEAD"],
-            text=True,
-        ).strip()
+class PinnedAuthorityCompatibilityTests(unittest.TestCase):
+    def test_all_frames_and_current_normative_bytes_offline(self) -> None:
+        manifest, chain_bytes, spec_bytes = pinned_fixture()
         self.assertEqual(
-            authority_commit,
-            "bfa0706a4dd448b98b59c68aece0761d625923cb",
+            manifest["schema"],
+            "rapp-sdk-authority-fixture/1",
         )
-        chain = SpecChain.load(root / "anchor" / "chain.jsonl")
+        self.assertEqual(
+            manifest["authority_commit"],
+            PINNED_AUTHORITY_COMMIT,
+        )
+        self.assertEqual(manifest["chain"]["frames"], 14)
+        self.assertEqual(manifest["chain"]["bytes"], len(chain_bytes))
+        self.assertEqual(manifest["chain"]["sha256"], PINNED_CHAIN_SHA256)
+        self.assertEqual(manifest["normative"]["bytes"], len(spec_bytes))
+        self.assertEqual(manifest["normative"]["sha256"], PINNED_SPEC_SHA256)
+
+        source = PinnedFixtureSource(spec_bytes)
+        with mock.patch(
+            "urllib.request.OpenerDirector.open",
+            side_effect=AssertionError("network access is forbidden"),
+        ), mock.patch(
+            "socket.create_connection",
+            side_effect=AssertionError("network access is forbidden"),
+        ):
+            chain = SpecChain.from_jsonl(chain_bytes)
+            resolved = chain.materialize("head", source=source)
+
         self.assertEqual(len(chain), 14)
+        self.assertEqual([revision.seq for revision in chain], list(range(14)))
+        actual_frames = [
+            {
+                "seq": revision.seq,
+                "revision": revision.revision,
+                "frame_hash": revision.frame_hash,
+                "payload_hash": revision.payload_hash,
+                "normative_sha256": revision.normative_sha256,
+                "normative_bytes": revision.normative_bytes,
+            }
+            for revision in chain
+        ]
+        self.assertEqual(actual_frames, manifest["frames"])
+        for expected in manifest["frames"]:
+            revision = chain.resolve(expected["seq"])
+            self.assertEqual(
+                chain.resolve(revision.frame_hash).address,
+                revision.address,
+            )
+            self.assertEqual(
+                chain.resolve(revision.payload_hash).address,
+                revision.address,
+            )
+
         self.assertEqual(chain.head.revision, "rev-13")
         self.assertEqual(chain.head.seq, 13)
         self.assertEqual(
@@ -345,20 +386,22 @@ class CurrentAuthorityCompatibilityTests(unittest.TestCase):
             "https://raw.githubusercontent.com/kody-w/rapp-1/"
             "5e30f66396f4cd125bce5718b1fef92d8d3ddab8/SPEC.md",
         )
+        self.assertEqual(len(resolved), 65569)
+        self.assertEqual(resolved, spec_bytes)
+        self.assertEqual(hashlib.sha256(resolved).hexdigest(), PINNED_SPEC_SHA256)
+        self.assertEqual(
+            source.calls,
+            [
+                (
+                    "https://github.com/kody-w/rapp-1",
+                    "5e30f66396f4cd125bce5718b1fef92d8d3ddab8",
+                    "SPEC.md",
+                    65569,
+                )
+            ],
+        )
         reloaded = SpecChain.from_jsonl(chain.to_jsonl_bytes())
         self.assertEqual(reloaded.head.address, chain.head.address)
-        spec = chain.materialize("head", source=LocalGitSource(root))
-        self.assertEqual(len(spec), 65569)
-        self.assertEqual(len(spec), chain.head.normative_bytes)
-        self.assertEqual(
-            hashlib.sha256(spec).hexdigest(),
-            "e5abd6a32801761fdd5c151a4f90fa4c989b545da02d3cd26dfc4765fab8409a",
-        )
-        self.assertEqual(
-            hashlib.sha256(spec).hexdigest(),
-            chain.head.normative_sha256,
-        )
-        self.assertEqual(spec, (root / "SPEC.md").read_bytes())
 
 
 if __name__ == "__main__":

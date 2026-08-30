@@ -1,0 +1,2 @@
+include tests/__init__.py tests/authority_fixture.py tests/live_authority_refresh.py
+recursive-include tests/fixtures *.gz *.json *.md

@@ -3,6 +3,7 @@ __pycache__/
 *.egg-info/
 .build-artifacts/
 .install-smoke/
+.sdist-smoke/
 .scratch/
 build/
 dist/

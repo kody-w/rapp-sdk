@@ -70,6 +70,20 @@ python3 -m pip install --no-deps --target .install-smoke \
   .build-artifacts/rapp_sdk-0.1.0-py3-none-any.whl
 ```
 
+The default offline test suite includes a checksum-pinned authority fixture
+and verifies all 14 frames plus the exact rev-13 normative bytes:
+
+```console
+python3 -m unittest discover -v
+```
+
+Run the separate optional reproducibility check against a local checkout with:
+
+```console
+RAPP1_AUTHORITY_ROOT=/path/to/rapp-1 \
+  python3 tests/live_authority_refresh.py
+```
+
 ## License
 
 Released under the MIT License.

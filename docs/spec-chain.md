@@ -57,6 +57,18 @@ except RappSDKError as error:
 Importing the package is inert: it performs no filesystem access, network
 access, environment reads, logging, or package-metadata discovery.
 
+## Offline authority parity
+
+The source distribution carries a deterministic gzip fixture pinned to the
+authority commit recorded in its manifest. The default `unittest` suite
+checks the compressed and raw hashes, verifies every chain frame, resolves the
+current revision through an injected immutable source, and blocks network
+opening during the proof. No environment variable or mutable URL is needed.
+
+The non-discovered `tests/live_authority_refresh.py` utility provides the
+separate optional reproducibility check against the same immutable commit in
+a local authority checkout.
+
 ## Legacy pointer revisions
 
 Existing authority frames point to immutable GitHub objects with:
