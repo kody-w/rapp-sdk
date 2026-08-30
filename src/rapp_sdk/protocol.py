@@ -14,7 +14,9 @@ import re
 import time
 from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
-from typing import Any
+from typing import TypeAlias
+
+from .errors import ErrorContext, ProtocolError
 
 SPEC = "rapp/1"
 PARTICLE_SPACE = "rapp/1:particle"
@@ -61,21 +63,24 @@ _UTC_RE = re.compile(
 )
 _B64URL_RE = re.compile(r"^[A-Za-z0-9_-]*$", re.ASCII)
 
-JsonValue = Any
-SignatureVerifier = Callable[[Mapping[str, JsonValue]], bool | tuple[bool, str]]
+JsonScalar: TypeAlias = None | bool | int | str
+JsonValue: TypeAlias = (
+    JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
+)
+JsonObject: TypeAlias = dict[str, JsonValue]
+Frame: TypeAlias = dict[str, JsonValue]
+FrameMapping: TypeAlias = Mapping[str, JsonValue]
+SignatureVerifier = Callable[[FrameMapping], bool | tuple[bool, str]]
 
 
-class ProtocolError(ValueError):
-    """A fail-closed protocol validation error."""
-
-    def __init__(self, code: str, message: str, *, step: str | None = None):
-        super().__init__(message)
-        self.code = code
-        self.step = step
-
-
-def _fail(code: str, message: str, *, step: str = "1") -> None:
-    raise ProtocolError(code, message, step=step)
+def _fail(
+    code: str,
+    message: str,
+    *,
+    step: str = "1",
+    context: Mapping[str, ErrorContext] | None = None,
+) -> None:
+    raise ProtocolError(code, message, step=step, context=context)
 
 
 def _has_lone_surrogate(value: str) -> bool:
@@ -90,6 +95,7 @@ def _validate_json_value(value: JsonValue) -> None:
             _fail(
                 "depth-exceeded",
                 f"JSON nesting depth exceeds {MAX_JSON_DEPTH}",
+                context={"actual_depth": depth, "max_depth": MAX_JSON_DEPTH},
             )
         if current is None or type(current) is bool:
             continue
@@ -154,7 +160,12 @@ def _canonical_text(value: JsonValue) -> str:
 def canonicalize(
     value: JsonValue, *, max_bytes: int = MAX_CANONICAL_BYTES
 ) -> bytes:
-    """Return authority-compatible canonical UTF-8 JSON bytes."""
+    """Return authority-compatible canonical UTF-8 JSON bytes.
+
+    Example:
+        >>> canonicalize({"z": 2, "a": [True, None]})
+        b'{"a":[true,null],"z":2}'
+    """
 
     if type(max_bytes) is not int or max_bytes < 0:
         raise ValueError("max_bytes must be a non-negative integer")
@@ -164,12 +175,13 @@ def canonicalize(
         _fail(
             "canonical-size-exceeded",
             f"canonical JSON exceeds {max_bytes} bytes",
+            context={"actual_bytes": len(encoded), "max_bytes": max_bytes},
         )
     return encoded
 
 
 def canonical(value: JsonValue, *, max_bytes: int = MAX_CANONICAL_BYTES) -> str:
-    """Return canonical JSON text."""
+    """Return canonical JSON text rather than UTF-8 bytes."""
 
     return canonicalize(value, max_bytes=max_bytes).decode("utf-8")
 
@@ -178,7 +190,11 @@ def _object_from_pairs(pairs: list[tuple[str, JsonValue]]) -> dict[str, JsonValu
     result: dict[str, JsonValue] = {}
     for key, value in pairs:
         if key in result:
-            _fail("duplicate-key", f"duplicate JSON object member: {key!r}")
+            _fail(
+                "duplicate-key",
+                f"duplicate JSON object member: {key!r}",
+                context={"key": key},
+            )
         result[key] = value
     return result
 
@@ -194,7 +210,11 @@ def _parse_integer(token: str) -> int:
 
 
 def _reject_float(token: str) -> None:
-    _fail("float-forbidden", f"RAPP/1 canonical JSON forbids float token {token!r}")
+    _fail(
+        "float-forbidden",
+        f"RAPP/1 canonical JSON forbids float token {token!r}",
+        context={"token": token},
+    )
 
 
 def _reject_constant(token: str) -> None:
@@ -206,7 +226,14 @@ def strict_json_loads(
     *,
     max_bytes: int = MAX_CANONICAL_BYTES,
 ) -> JsonValue:
-    """Parse strict UTF-8 I-JSON, refusing duplicate keys and floats."""
+    """Parse strict UTF-8 I-JSON, refusing duplicate keys and floats.
+
+    This byte-only boundary prevents implicit platform encoding decisions.
+
+    Example:
+        >>> strict_json_loads(b'{"answer":42}')
+        {'answer': 42}
+    """
 
     if not isinstance(data, (bytes, bytearray, memoryview)):
         raise TypeError("strict_json_loads accepts UTF-8 bytes")
@@ -214,7 +241,11 @@ def strict_json_loads(
         raise ValueError("max_bytes must be a non-negative integer")
     octets = bytes(data)
     if len(octets) > max_bytes:
-        _fail("input-size-exceeded", f"JSON input exceeds {max_bytes} bytes")
+        _fail(
+            "input-size-exceeded",
+            f"JSON input exceeds {max_bytes} bytes",
+            context={"actual_bytes": len(octets), "max_bytes": max_bytes},
+        )
     if octets.startswith(b"\xef\xbb\xbf"):
         _fail("utf8-bom", "a UTF-8 byte-order mark is forbidden")
     try:
@@ -389,17 +420,17 @@ def _validate_signature_shape(sig: JsonValue) -> None:
         _fail("invalid-signature", "JWS protected header must be canonical JSON")
 
 
-def _frame_copy(frame: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+def _frame_copy(frame: FrameMapping) -> Frame:
     if not isinstance(frame, Mapping):
         _fail("invalid-frame", "frame must be an object")
     return dict(frame)
 
 
 def _validate_frame_integrity(
-    frame_value: Mapping[str, JsonValue],
+    frame_value: FrameMapping,
     *,
     expected_stream_id: str | None = None,
-) -> tuple[dict[str, JsonValue], str]:
+) -> tuple[Frame, str]:
     frame = _frame_copy(frame_value)
     if set(frame) != FRAME_KEYS:
         missing = sorted(FRAME_KEYS - set(frame))
@@ -407,6 +438,10 @@ def _validate_frame_integrity(
         _fail(
             "invalid-frame-shape",
             f"frame must have exactly eleven keys; missing={missing}, extra={extra}",
+            context={
+                "missing": ",".join(missing),
+                "extra": ",".join(extra),
+            },
         )
     canonicalize(frame)
     if frame["spec"] != SPEC:
@@ -431,21 +466,43 @@ def _validate_frame_integrity(
             "stream-id-mismatch",
             "frame stream_id does not match the stream of record",
             step="1a",
+            context={
+                "actual_stream_id": frame["stream_id"],
+                "expected_stream_id": expected_stream_id,
+            },
         )
-    if frame["payload_hash"] != H(PARTICLE_SPACE, frame["payload"]):
-        _fail("payload-hash-mismatch", "payload_hash mismatch", step="2")
+    expected_payload_hash = H(PARTICLE_SPACE, frame["payload"])
+    if frame["payload_hash"] != expected_payload_hash:
+        _fail(
+            "payload-hash-mismatch",
+            "payload_hash mismatch",
+            step="2",
+            context={
+                "actual_payload_hash": frame["payload_hash"],
+                "expected_payload_hash": expected_payload_hash,
+            },
+        )
     wave_preimage = {
         key: value
         for key, value in frame.items()
         if key not in {"frame_hash", "sig"}
     }
-    if frame["frame_hash"] != H(WAVE_SPACE, wave_preimage):
-        _fail("frame-hash-mismatch", "frame_hash mismatch", step="3")
+    expected_frame_hash = H(WAVE_SPACE, wave_preimage)
+    if frame["frame_hash"] != expected_frame_hash:
+        _fail(
+            "frame-hash-mismatch",
+            "frame_hash mismatch",
+            step="3",
+            context={
+                "actual_frame_hash": frame["frame_hash"],
+                "expected_frame_hash": expected_frame_hash,
+            },
+        )
     return frame, family
 
 
 def _verify_signature(
-    frame: Mapping[str, JsonValue],
+    frame: FrameMapping,
     family: str,
     signature_verifier: SignatureVerifier | None,
 ) -> None:
@@ -476,7 +533,11 @@ def _verify_signature(
                 step="6",
             )
         if ok is not True:
-            _fail("signature-invalid", reason, step="6")
+            _fail(
+                "signature-invalid",
+                reason or "signature verifier rejected the frame",
+                step="6",
+            )
 
 
 def build_frame(
@@ -489,14 +550,19 @@ def build_frame(
     *,
     prev_wave: str | None = None,
     sig: str | None = None,
-) -> dict[str, JsonValue]:
-    """Build an exact eleven-key RAPP/1 frame."""
+) -> Frame:
+    """Build an exact eleven-key RAPP/1 frame.
+
+    The returned dictionary is a wire object and can be serialized with
+    ``canonicalize()``. Immutable chain results are represented by
+    ``SpecRevision`` in :mod:`rapp_sdk.spec_chain`.
+    """
 
     if not isinstance(payload, Mapping):
         _fail("invalid-payload", "payload must be an object")
     payload_object = dict(payload)
     payload_hash = H(PARTICLE_SPACE, payload_object)
-    frame: dict[str, JsonValue] = {
+    frame: Frame = {
         "spec": SPEC,
         "kind": kind,
         "stream_id": stream_id,
@@ -530,13 +596,18 @@ def build_frame(
 
 
 def verify_frame(
-    frame: Mapping[str, JsonValue],
+    frame: FrameMapping,
     *,
-    head: Mapping[str, JsonValue] | None = None,
+    head: FrameMapping | None = None,
     expected_stream_id: str | None = None,
     signature_verifier: SignatureVerifier | None = None,
-) -> dict[str, JsonValue]:
-    """Verify one frame against its predecessor, refusing every mismatch."""
+) -> Frame:
+    """Verify one frame against its predecessor, refusing every mismatch.
+
+    ``head=None`` means the candidate must be a genesis. Signed frames require
+    an injected ``signature_verifier``; signature verification is never
+    silently skipped.
+    """
 
     candidate, family = _validate_frame_integrity(
         frame,
@@ -567,14 +638,30 @@ def verify_frame(
             "stream-id-mismatch",
             "frame and predecessor are from different streams",
             step="1a",
+            context={
+                "frame_stream_id": candidate["stream_id"],
+                "head_stream_id": predecessor["stream_id"],
+            },
         )
     if candidate["seq"] != predecessor["seq"] + 1:
-        _fail("noncontiguous-seq", "seq does not extend the predecessor", step="4")
+        _fail(
+            "noncontiguous-seq",
+            "seq does not extend the predecessor",
+            step="4",
+            context={
+                "actual_seq": candidate["seq"],
+                "expected_seq": predecessor["seq"] + 1,
+            },
+        )
     if candidate["prev"] != predecessor["payload_hash"]:
         _fail(
             "previous-payload-mismatch",
             "prev does not equal predecessor payload_hash",
             step="4",
+            context={
+                "actual_prev": candidate["prev"],
+                "expected_prev": predecessor["payload_hash"],
+            },
         )
     if candidate["utc"] < predecessor["utc"]:
         _fail("utc-regression", "utc is earlier than predecessor utc", step="4")
@@ -596,14 +683,19 @@ def verify_frame(
 
 
 def verify_stream(
-    frames: Iterable[Mapping[str, JsonValue]],
+    frames: Iterable[FrameMapping],
     *,
     expected_stream_id: str | None = None,
     signature_verifier: SignatureVerifier | None = None,
     max_frames: int = MAX_STREAM_FRAMES,
     max_seconds: float = DEFAULT_VERIFY_SECONDS,
-) -> tuple[dict[str, JsonValue], ...]:
-    """Verify a linear, single-writer stream in supplied chain order."""
+) -> tuple[Frame, ...]:
+    """Verify a linear, single-writer stream in supplied chain order.
+
+    Returns fresh top-level frame dictionaries as a tuple. The stream is
+    bounded by frame count, canonical byte ceilings, JSON depth, and a
+    wall-clock verification budget.
+    """
 
     if type(max_frames) is not int or max_frames <= 0:
         raise ValueError("max_frames must be a positive integer")
@@ -614,10 +706,10 @@ def verify_stream(
     ):
         raise ValueError("max_seconds must be finite and non-negative")
     deadline = time.monotonic() + max_seconds
-    verified: list[dict[str, JsonValue]] = []
+    verified: list[Frame] = []
     seen_seq: set[int] = set()
     seen_frame_hash: set[str] = set()
-    head: dict[str, JsonValue] | None = None
+    head: Frame | None = None
     stream_id = expected_stream_id
     for count, frame in enumerate(frames, start=1):
         if time.monotonic() >= deadline:
@@ -625,18 +717,25 @@ def verify_stream(
                 "verification-time-exceeded",
                 "stream verification exceeded its time budget",
                 step="time",
+                context={"max_seconds": str(max_seconds)},
             )
         if count > max_frames:
             _fail(
                 "frame-count-exceeded",
                 f"stream exceeds {max_frames} frames",
                 step="size",
+                context={"actual_frames": count, "max_frames": max_frames},
             )
         supplied = _frame_copy(frame)
         seq = supplied.get("seq")
         frame_hash = supplied.get("frame_hash")
         if type(seq) is int and seq in seen_seq:
-            _fail("duplicate-seq", f"duplicate or forked seq {seq}", step="4")
+            _fail(
+                "duplicate-seq",
+                f"duplicate or forked seq {seq}",
+                step="4",
+                context={"seq": seq},
+            )
         if type(frame_hash) is str and frame_hash in seen_frame_hash:
             _fail("duplicate-frame", "duplicate frame_hash", step="3")
         if stream_id is None and type(supplied.get("stream_id")) is str:
@@ -658,15 +757,21 @@ def verify_stream(
             "verification-time-exceeded",
             "stream verification exceeded its time budget",
             step="time",
+            context={"max_seconds": str(max_seconds)},
         )
     return tuple(verified)
 
 
-__all__ = [
+__all__ = (
     "DEFAULT_VERIFY_SECONDS",
     "FRAME_KEYS",
+    "Frame",
+    "FrameMapping",
     "H",
     "Hb",
+    "JsonObject",
+    "JsonScalar",
+    "JsonValue",
     "MAX_CANONICAL_BYTES",
     "MAX_JSON_DEPTH",
     "MAX_SAFE_INTEGER",
@@ -674,6 +779,7 @@ __all__ = [
     "PARTICLE_SPACE",
     "ProtocolError",
     "SPEC",
+    "SignatureVerifier",
     "WAVE_SPACE",
     "build_frame",
     "canonical",
@@ -681,4 +787,4 @@ __all__ = [
     "strict_json_loads",
     "verify_frame",
     "verify_stream",
-]
+)

@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .build-artifacts/
+.install-smoke/
 .scratch/
 build/
 dist/

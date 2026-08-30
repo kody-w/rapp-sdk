@@ -25,6 +25,38 @@ Verification refuses forks and never repairs or reparents frames.
 Producers must serialize appends so that each stream has exactly one writer;
 competing children at one sequence are a refused fork, not a merge request.
 
+## Public API and value semantics
+
+`SpecChain` is the verified index. Create one with:
+
+- `SpecChain.from_frames(iterable)` for decoded mappings;
+- `SpecChain.from_jsonl(bytes)` for an explicit UTF-8 byte boundary;
+- `SpecChain.from_jsonl_text(str)` for an explicit text boundary; or
+- `SpecChain.load(str | os.PathLike[str])` for a filesystem path.
+
+The chain is sequence-like and exposes immutable `SpecRevision` values.
+`SpecRevision.address` is an immutable `RevisionAddress`. `to_dict()` returns a
+fresh mutable wire dictionary, while `to_json_bytes()`, `frame_bytes`, and
+`SpecChain.to_jsonl_bytes()` are deterministic canonical byte serializations.
+`materialize()` always returns verified bytes; decode only after checking the
+revision's `media_type`.
+
+Expected refusals derive from `RappSDKError`. Each has a stable `code`, an
+operation or protocol `step`, immutable scalar `context`, deterministic
+`repr`, and `as_dict()` for logging:
+
+```python
+from rapp_sdk import RappSDKError, SpecChain
+
+try:
+    chain = SpecChain.from_jsonl(untrusted_bytes)
+except RappSDKError as error:
+    diagnostic = error.as_dict()
+```
+
+Importing the package is inert: it performs no filesystem access, network
+access, environment reads, logging, or package-metadata discovery.
+
 ## Legacy pointer revisions
 
 Existing authority frames point to immutable GitHub objects with:

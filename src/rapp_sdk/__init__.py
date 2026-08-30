@@ -1,10 +1,28 @@
-"""Public RAPP SDK protocol and specification-chain API."""
+"""Stable public API for RAPP/1 frames and specification chains.
 
+Importing :mod:`rapp_sdk` performs no I/O, network access, environment reads,
+or runtime dependency discovery.
+"""
+
+from ._version import VERSION, __version__, __version_info__
+from .errors import (
+    CacheIntegrityError,
+    ProtocolError,
+    RappSDKError,
+    SpecChainError,
+    SpecResolutionError,
+)
 from .protocol import (
     FRAME_KEYS,
+    PARTICLE_SPACE,
+    SPEC,
+    WAVE_SPACE,
+    Frame,
+    FrameMapping,
     H,
     Hb,
-    ProtocolError,
+    JsonValue,
+    SignatureVerifier,
     build_frame,
     canonical,
     canonicalize,
@@ -14,39 +32,51 @@ from .protocol import (
 )
 from .spec_chain import (
     ByteFetcher,
-    CacheIntegrityError,
     ContentAddressedCache,
     GitHubRawSource,
     HTTPSFetcher,
     ImmutableSource,
     MAX_CHAIN_BYTES,
     MAX_SPEC_BYTES,
+    RevisionAddress,
+    RevisionSelector,
     SpecChain,
-    SpecChainError,
-    SpecResolutionError,
     SpecRevision,
+    StrPath,
     build_spec_revision_frame,
 )
 
-__version__ = "0.1.0"
-
-__all__ = [
+__all__ = (
     "ByteFetcher",
     "CacheIntegrityError",
     "ContentAddressedCache",
     "FRAME_KEYS",
+    "Frame",
+    "FrameMapping",
     "GitHubRawSource",
     "H",
     "HTTPSFetcher",
     "Hb",
     "ImmutableSource",
+    "JsonValue",
     "MAX_CHAIN_BYTES",
     "MAX_SPEC_BYTES",
+    "PARTICLE_SPACE",
     "ProtocolError",
+    "RappSDKError",
+    "RevisionAddress",
+    "RevisionSelector",
+    "SPEC",
+    "SignatureVerifier",
     "SpecChain",
     "SpecChainError",
     "SpecResolutionError",
     "SpecRevision",
+    "StrPath",
+    "VERSION",
+    "WAVE_SPACE",
+    "__version__",
+    "__version_info__",
     "build_frame",
     "build_spec_revision_frame",
     "canonical",
@@ -54,4 +84,4 @@ __all__ = [
     "strict_json_loads",
     "verify_frame",
     "verify_stream",
-]
+)

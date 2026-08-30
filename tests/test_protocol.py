@@ -4,7 +4,7 @@ import copy
 import json
 import unittest
 
-from rapp_sdk.protocol import (
+from rapp_sdk import (
     FRAME_KEYS,
     H,
     ProtocolError,

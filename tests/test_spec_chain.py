@@ -2,23 +2,25 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import io
 import json
 import os
 import subprocess
 import unittest
 from pathlib import Path
 
-from rapp_sdk.protocol import H, PARTICLE_SPACE, WAVE_SPACE, canonicalize
-from rapp_sdk.spec_chain import (
+from rapp_sdk import (
     CacheIntegrityError,
     ContentAddressedCache,
     GitHubRawSource,
+    H,
     HTTPSFetcher,
+    PARTICLE_SPACE,
     SpecChain,
     SpecChainError,
     SpecResolutionError,
+    WAVE_SPACE,
     build_spec_revision_frame,
+    canonicalize,
 )
 
 STREAM_ID = (
@@ -52,7 +54,7 @@ def pointer_frame(
     commit: str = COMMIT,
     path: str = "SPEC.md",
 ) -> dict:
-    from rapp_sdk.protocol import build_frame
+    from rapp_sdk import build_frame
 
     return build_frame(
         "body.pulse",
@@ -343,6 +345,8 @@ class CurrentAuthorityCompatibilityTests(unittest.TestCase):
             "https://raw.githubusercontent.com/kody-w/rapp-1/"
             "5e30f66396f4cd125bce5718b1fef92d8d3ddab8/SPEC.md",
         )
+        reloaded = SpecChain.from_jsonl(chain.to_jsonl_bytes())
+        self.assertEqual(reloaded.head.address, chain.head.address)
         spec = chain.materialize("head", source=LocalGitSource(root))
         self.assertEqual(len(spec), 65569)
         self.assertEqual(len(spec), chain.head.normative_bytes)

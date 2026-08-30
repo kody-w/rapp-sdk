@@ -19,6 +19,7 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
+  "Typing :: Typed",
 ]
 dependencies = []
 
@@ -34,7 +35,11 @@ package-dir = { "" = "src" }
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+rapp_sdk = ["py.typed"]
+
 [tool.setuptools.data-files]
 "share/rapp-sdk" = ["DISCLAIMER.md"]
 "share/rapp-sdk/docs" = ["docs/spec-chain.md"]
+"share/rapp-sdk/examples" = ["examples/spec_chain_smoke.py"]
 "share/rapp-sdk/schemas" = ["schemas/rapp-spec-revision-v1.schema.json"]

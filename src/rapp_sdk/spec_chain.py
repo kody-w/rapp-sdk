@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import hashlib
 import math
 import os
@@ -11,16 +10,28 @@ import secrets
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping, Set
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any, Protocol
+from types import MappingProxyType
+from typing import Any, Protocol, TypeAlias, overload
+
+from ._version import __version__
+from .errors import (
+    CacheIntegrityError,
+    ErrorContext,
+    ProtocolError,
+    SpecChainError,
+    SpecResolutionError,
+)
 
 from .protocol import (
     DEFAULT_VERIFY_SECONDS,
+    Frame,
+    FrameMapping,
+    JsonValue,
     MAX_CANONICAL_BYTES,
     MAX_SAFE_INTEGER,
-    ProtocolError,
     _validate_frame_integrity,
     build_frame,
     canonicalize,
@@ -48,17 +59,8 @@ _POINTER_KEYS = frozenset(
     }
 )
 
-
-class SpecChainError(ProtocolError):
-    """A fail-closed specification-chain error."""
-
-
-class SpecResolutionError(SpecChainError):
-    """A specification revision cannot be safely resolved."""
-
-
-class CacheIntegrityError(SpecResolutionError):
-    """A content-addressed cache object failed revalidation."""
+StrPath: TypeAlias = str | os.PathLike[str]
+RevisionSelector: TypeAlias = str | int
 
 
 class ByteFetcher(Protocol):
@@ -82,17 +84,76 @@ class ImmutableSource(Protocol):
         """Return bytes for one immutable repository path."""
 
 
-def _chain_fail(code: str, message: str, *, step: str = "spec") -> None:
-    raise SpecChainError(code, message, step=step)
+class _ResponseHeaders(Protocol):
+    def get(self, name: str) -> str | None:
+        """Return one response header."""
 
 
-def _validate_https_url(url: str, allowed_hosts: frozenset[str]) -> None:
+class _HTTPResponse(Protocol):
+    status: int
+    headers: _ResponseHeaders
+
+    def __enter__(self) -> "_HTTPResponse": ...
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: object | None,
+    ) -> bool | None: ...
+
+    def geturl(self) -> str: ...
+
+    def read(self, amount: int) -> bytes: ...
+
+
+class _URLOpener(Protocol):
+    def open(
+        self,
+        request: urllib.request.Request,
+        *,
+        timeout: float,
+    ) -> _HTTPResponse: ...
+
+
+def _chain_fail(
+    code: str,
+    message: str,
+    *,
+    step: str = "spec",
+    context: Mapping[str, ErrorContext] | None = None,
+) -> None:
+    raise SpecChainError(code, message, step=step, context=context)
+
+
+def _path_from(value: StrPath, *, name: str) -> Path:
+    try:
+        raw = os.fspath(value)
+    except TypeError as exc:
+        raise TypeError(f"{name} must be str or os.PathLike[str]") from exc
+    if not isinstance(raw, str):
+        raise TypeError(f"{name} must resolve to text, not bytes")
+    return Path(raw)
+
+
+def _validate_https_url(url: str, allowed_hosts: Set[str]) -> None:
+    if not isinstance(url, str):
+        raise TypeError("URL must be text")
+    if any(ord(character) <= 0x20 or ord(character) == 0x7F for character in url):
+        raise SpecResolutionError(
+            "unsafe-url",
+            "URL contains control characters or whitespace",
+            step="fetch",
+        )
     try:
         parsed = urllib.parse.urlsplit(url)
         port = parsed.port
     except ValueError as exc:
         raise SpecResolutionError(
-            "unsafe-url", "URL is not structurally valid", step="fetch"
+            "unsafe-url",
+            "URL is not structurally valid",
+            step="fetch",
+            context={"url": url},
         ) from exc
     hostname = (parsed.hostname or "").lower()
     if (
@@ -107,11 +168,12 @@ def _validate_https_url(url: str, allowed_hosts: frozenset[str]) -> None:
             "unsafe-url",
             "fetch URL or redirect is outside the allowed HTTPS hosts",
             step="fetch",
+            context={"url": url},
         )
 
 
 class _RestrictedRedirectHandler(urllib.request.HTTPRedirectHandler):
-    def __init__(self, allowed_hosts: frozenset[str]):
+    def __init__(self, allowed_hosts: frozenset[str]) -> None:
         super().__init__()
         self._allowed_hosts = allowed_hosts
 
@@ -130,17 +192,28 @@ class _RestrictedRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 
 class HTTPSFetcher:
-    """Bounded HTTPS fetcher that validates every redirect and final URL."""
+    """Bounded HTTPS transport with an allowlist and redirect validation.
+
+    The default transport accepts only ``raw.githubusercontent.com`` over
+    HTTPS. Pass a custom ``ByteFetcher`` to ``GitHubRawSource`` for tests or
+    non-network environments instead of weakening this policy.
+    """
+
+    __slots__ = ("_allowed_hosts", "_timeout", "_opener")
 
     def __init__(
         self,
         *,
-        allowed_hosts: frozenset[str] = DEFAULT_ALLOWED_FETCH_HOSTS,
+        allowed_hosts: Collection[str] = DEFAULT_ALLOWED_FETCH_HOSTS,
         timeout: float = DEFAULT_FETCH_SECONDS,
-        opener: Any | None = None,
-    ):
+        opener: _URLOpener | None = None,
+    ) -> None:
+        if isinstance(allowed_hosts, (str, bytes)):
+            raise TypeError("allowed_hosts must be a collection of text hostnames")
         if not allowed_hosts:
             raise ValueError("allowed_hosts cannot be empty")
+        if any(not isinstance(host, str) for host in allowed_hosts):
+            raise TypeError("allowed_hosts must contain text hostnames")
         normalized = frozenset(host.lower() for host in allowed_hosts)
         if any(not host or "/" in host for host in normalized):
             raise ValueError("allowed_hosts contains an invalid hostname")
@@ -150,10 +223,28 @@ class HTTPSFetcher:
             or timeout <= 0
         ):
             raise ValueError("timeout must be finite and positive")
-        self.allowed_hosts = normalized
-        self.timeout = float(timeout)
+        self._allowed_hosts = normalized
+        self._timeout = float(timeout)
         self._opener = opener or urllib.request.build_opener(
             _RestrictedRedirectHandler(normalized)
+        )
+
+    @property
+    def allowed_hosts(self) -> frozenset[str]:
+        """Immutable set of accepted request, redirect, and final hosts."""
+
+        return self._allowed_hosts
+
+    @property
+    def timeout(self) -> float:
+        """Network timeout in seconds."""
+
+        return self._timeout
+
+    def __repr__(self) -> str:
+        return (
+            f"HTTPSFetcher(allowed_hosts={sorted(self.allowed_hosts)!r}, "
+            f"timeout={self.timeout!r})"
         )
 
     def fetch(self, url: str, *, max_bytes: int) -> bytes:
@@ -164,7 +255,7 @@ class HTTPSFetcher:
             url,
             headers={
                 "Accept": "application/octet-stream",
-                "User-Agent": "rapp-sdk-spec-chain/0.1",
+                "User-Agent": f"rapp-sdk-spec-chain/{__version__}",
             },
         )
         try:
@@ -177,6 +268,7 @@ class HTTPSFetcher:
                         "fetch-status",
                         f"immutable source returned HTTP {status}",
                         step="fetch",
+                        context={"status": status, "url": final_url},
                     )
                 content_length = response.headers.get("Content-Length")
                 if content_length is not None:
@@ -187,30 +279,50 @@ class HTTPSFetcher:
                             "invalid-content-length",
                             "source returned an invalid Content-Length",
                             step="fetch",
+                            context={"url": final_url},
                         ) from exc
                     if announced < 0 or announced > max_bytes:
                         raise SpecResolutionError(
                             "fetch-size-exceeded",
                             f"source exceeds {max_bytes} bytes",
                             step="fetch",
+                            context={
+                                "announced_bytes": announced,
+                                "max_bytes": max_bytes,
+                                "url": final_url,
+                            },
                         )
                 data = response.read(max_bytes + 1)
         except SpecResolutionError:
             raise
         except (OSError, urllib.error.URLError) as exc:
             raise SpecResolutionError(
-                "fetch-failed", f"immutable source is unavailable: {exc}", step="fetch"
+                "fetch-failed",
+                f"immutable source is unavailable: {exc}",
+                step="fetch",
+                context={"url": url},
             ) from exc
         if len(data) > max_bytes:
             raise SpecResolutionError(
                 "fetch-size-exceeded",
                 f"source exceeds {max_bytes} bytes",
                 step="fetch",
+                context={
+                    "actual_bytes": len(data),
+                    "max_bytes": max_bytes,
+                    "url": url,
+                },
             )
         return data
 
 
 def _github_coordinates(repository: str) -> tuple[str, str]:
+    if type(repository) is not str:
+        raise SpecChainError(
+            "invalid-repository",
+            "canonical_repo must be text",
+            step="profile",
+        )
     try:
         parsed = urllib.parse.urlsplit(repository)
         port = parsed.port
@@ -247,16 +359,23 @@ def _validate_commit(commit: Any) -> str:
             "mutable-revision",
             "legacy pointers require an immutable 40-hex commit",
             step="profile",
+            context={"commit": commit if isinstance(commit, str) else None},
         )
     return commit
 
 
 def _validate_path(path: Any) -> str:
-    if type(path) is not str or not path or "\\" in path or "%" in path:
+    if (
+        type(path) is not str
+        or not 1 <= len(path) <= 1024
+        or "\\" in path
+        or "%" in path
+    ):
         _chain_fail(
             "unsafe-path",
-            "normative_path must be a non-empty unescaped POSIX path",
+            "normative_path must be a 1-1024 character unescaped POSIX path",
             step="profile",
+            context={"path": path if isinstance(path, str) else None},
         )
     candidate = PurePosixPath(path)
     if (
@@ -270,6 +389,7 @@ def _validate_path(path: Any) -> str:
             "unsafe-path",
             "normative_path cannot be absolute, normalized, or traversing",
             step="profile",
+            context={"path": path},
         )
     return path
 
@@ -305,13 +425,28 @@ def _validate_spec_size(value: Any, *, field: str) -> int:
 
 
 class GitHubRawSource:
-    """Resolve immutable GitHub paths through raw.githubusercontent.com."""
+    """Resolve immutable GitHub paths through ``raw.githubusercontent.com``."""
 
-    def __init__(self, fetcher: ByteFetcher | None = None):
-        self.fetcher = fetcher or HTTPSFetcher()
+    __slots__ = ("_fetcher",)
+
+    def __init__(self, fetcher: ByteFetcher | None = None) -> None:
+        self._fetcher = fetcher or HTTPSFetcher()
+
+    @property
+    def fetcher(self) -> ByteFetcher:
+        """Injected bounded byte transport."""
+
+        return self._fetcher
+
+    def __repr__(self) -> str:
+        fetcher_type = type(self.fetcher)
+        qualified = f"{fetcher_type.__module__}.{fetcher_type.__qualname__}"
+        return f"GitHubRawSource(fetcher_type={qualified!r})"
 
     @staticmethod
     def raw_url(repository: str, commit: str, path: str) -> str:
+        """Return a validated immutable raw GitHub URL."""
+
         owner, repo = _github_coordinates(repository)
         immutable_commit = _validate_commit(commit)
         safe_path = _validate_path(path)
@@ -329,6 +464,8 @@ class GitHubRawSource:
         *,
         max_bytes: int,
     ) -> bytes:
+        """Fetch one immutable path through the injected bounded transport."""
+
         return self.fetcher.fetch(
             self.raw_url(repository, commit, path),
             max_bytes=max_bytes,
@@ -336,12 +473,29 @@ class GitHubRawSource:
 
 
 class ContentAddressedCache:
-    """Checksum-revalidating cache with durable atomic object writes."""
+    """Checksum-revalidating cache with durable atomic object writes.
 
-    def __init__(self, root: str | os.PathLike[str]):
-        self.root = Path(root)
+    ``root`` must be a text path. Cache reads never trust filenames alone:
+    byte length and SHA-256 are revalidated on every access.
+    """
+
+    __slots__ = ("_root",)
+
+    def __init__(self, root: StrPath) -> None:
+        self._root = _path_from(root, name="root")
+
+    @property
+    def root(self) -> Path:
+        """Cache root as a text-backed :class:`pathlib.Path`."""
+
+        return self._root
+
+    def __repr__(self) -> str:
+        return f"ContentAddressedCache(root={str(self.root)!r})"
 
     def path_for(self, sha256: str) -> Path:
+        """Return the deterministic on-disk path for a SHA-256 object."""
+
         digest = _validate_sha256(sha256, field="cache sha256")
         return self.root / "sha256" / digest[:2] / digest[2:]
 
@@ -359,15 +513,27 @@ class ContentAddressedCache:
                 "cached-size-mismatch",
                 "cached object byte count does not match its address metadata",
                 step="cache",
+                context={
+                    "actual_bytes": len(data),
+                    "expected_bytes": expected_bytes,
+                    "sha256": sha256,
+                },
             )
-        if hashlib.sha256(data).hexdigest() != sha256:
+        actual_sha256 = hashlib.sha256(data).hexdigest()
+        if actual_sha256 != sha256:
             raise CacheIntegrityError(
                 "cached-hash-mismatch",
                 "cached object checksum does not match its address",
                 step="cache",
+                context={
+                    "actual_sha256": actual_sha256,
+                    "expected_sha256": sha256,
+                },
             )
 
     def get(self, sha256: str, expected_bytes: int) -> bytes | None:
+        """Return a revalidated object, or ``None`` when it is absent."""
+
         path = self.path_for(sha256)
         if not os.path.lexists(path):
             return None
@@ -397,6 +563,8 @@ class ContentAddressedCache:
             os.close(descriptor)
 
     def put(self, data: bytes, sha256: str, expected_bytes: int) -> Path:
+        """Atomically persist already-verified bytes and return their path."""
+
         if not isinstance(data, bytes):
             raise TypeError("cache data must be bytes")
         self._validate_bytes(data, sha256, expected_bytes)
@@ -424,9 +592,38 @@ class ContentAddressedCache:
         return path
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
+class RevisionAddress:
+    """Stable selectors for one frame in a verified specification chain."""
+
+    revision: str
+    seq: int
+    frame_hash: str
+    payload_hash: str
+
+    def as_dict(self) -> dict[str, str | int]:
+        """Return a deterministic JSON-ready address."""
+
+        return {
+            "revision": self.revision,
+            "seq": self.seq,
+            "frame_hash": self.frame_hash,
+            "payload_hash": self.payload_hash,
+        }
+
+    def to_json_bytes(self) -> bytes:
+        """Serialize the address as canonical UTF-8 JSON bytes."""
+
+        return canonicalize(self.as_dict())
+
+
+@dataclass(frozen=True, slots=True)
 class SpecRevision:
-    """One verified specification revision frame and its stable addresses."""
+    """Immutable metadata and canonical frame bytes for one spec revision.
+
+    ``to_dict()`` returns a fresh mutable wire object. ``frame_bytes`` and
+    ``to_json_bytes()`` expose the deterministic canonical representation.
+    """
 
     revision: str
     seq: int
@@ -436,27 +633,50 @@ class SpecRevision:
     normative_sha256: str
     normative_bytes: int
     media_type: str
-    _frame: dict[str, Any] = field(repr=False)
+    repository: str | None
+    commit: str | None
+    path: str | None
+    is_inline: bool
+    _frame_bytes: bytes = field(repr=False, compare=False)
 
     @property
-    def frame(self) -> dict[str, Any]:
-        return copy.deepcopy(self._frame)
+    def address(self) -> RevisionAddress:
+        """Return all stable selectors as an immutable value object."""
+
+        return RevisionAddress(
+            revision=self.revision,
+            seq=self.seq,
+            frame_hash=self.frame_hash,
+            payload_hash=self.payload_hash,
+        )
 
     @property
-    def is_inline(self) -> bool:
-        return "normative" in self._frame["payload"]
+    def frame_bytes(self) -> bytes:
+        """Canonical UTF-8 JSON bytes for the complete eleven-key frame."""
+
+        return self._frame_bytes
 
     @property
-    def repository(self) -> str | None:
-        return self._frame["payload"].get("canonical_repo")
+    def frame(self) -> Frame:
+        """Return a fresh mutable wire-frame dictionary.
 
-    @property
-    def commit(self) -> str | None:
-        return self._frame["payload"].get("commit")
+        This compatibility property is equivalent to ``to_dict()``.
+        """
 
-    @property
-    def path(self) -> str | None:
-        return self._frame["payload"].get("normative_path")
+        return self.to_dict()
+
+    def to_dict(self) -> Frame:
+        """Parse and return a fresh copy of the verified frame."""
+
+        value = strict_json_loads(self._frame_bytes)
+        if type(value) is not dict:
+            raise RuntimeError("stored frame bytes are not a JSON object")
+        return value
+
+    def to_json_bytes(self) -> bytes:
+        """Return canonical UTF-8 JSON bytes for the verified frame."""
+
+        return self._frame_bytes
 
     @property
     def global_url(self) -> str | None:
@@ -465,13 +685,13 @@ class SpecRevision:
         return GitHubRawSource.raw_url(self.repository, self.commit, self.path)
 
     def _inline_bytes(self) -> bytes | None:
-        normative = self._frame["payload"].get("normative")
+        normative = self.to_dict()["payload"].get("normative")
         if normative is None:
             return None
         return normative["text"].encode("utf-8")
 
 
-def _profile_revision(frame: dict[str, Any]) -> SpecRevision:
+def _profile_revision(frame: Frame) -> SpecRevision:
     payload = frame["payload"]
     revision = payload.get("revision")
     if type(revision) is not str or _REVISION_RE.fullmatch(revision) is None:
@@ -595,31 +815,67 @@ def _profile_revision(frame: dict[str, Any]) -> SpecRevision:
         normative_sha256=normative_sha,
         normative_bytes=normative_size,
         media_type=media_type,
-        _frame=copy.deepcopy(frame),
+        repository=payload.get("canonical_repo"),
+        commit=payload.get("commit"),
+        path=payload.get("normative_path"),
+        is_inline=normative is not None,
+        _frame_bytes=canonicalize(frame),
     )
 
 
 class SpecChain:
-    """A verified linear chain whose frames address immutable spec revisions."""
+    """Immutable index over a verified linear specification chain.
+
+    Construct from in-memory frames with ``from_frames()``, from UTF-8 JSONL
+    bytes with ``from_jsonl()``, or from a text path with ``load()``.
+
+    Example:
+        >>> first = build_spec_revision_frame(
+        ...     revision="rev-1",
+        ...     text="# RAPP/1\\n",
+        ...     utc="2026-08-30T00:00:00.000Z",
+        ...     stream_id="rappid:@example/spec:" + "0" * 64,
+        ... )
+        >>> chain = SpecChain.from_frames([first])
+        >>> chain.head.revision
+        'rev-1'
+        >>> chain.materialize()
+        b'# RAPP/1\\n'
+    """
+
+    __slots__ = (
+        "_revisions",
+        "_by_revision",
+        "_by_seq",
+        "_by_frame_hash",
+        "_by_payload_hash",
+    )
+    _revisions: tuple[SpecRevision, ...]
+    _by_revision: Mapping[str, tuple[SpecRevision, ...]]
+    _by_seq: Mapping[int, SpecRevision]
+    _by_frame_hash: Mapping[str, SpecRevision]
+    _by_payload_hash: Mapping[str, SpecRevision]
 
     def __init__(
         self,
-        frames: tuple[dict[str, Any], ...],
+        frames: Iterable[FrameMapping],
         *,
         expected_stream_id: str | None = None,
         max_seconds: float = DEFAULT_VERIFY_SECONDS,
-    ):
+    ) -> None:
+        supplied_frames = tuple(frames)
         try:
             verified = verify_stream(
-                frames,
+                supplied_frames,
                 expected_stream_id=expected_stream_id,
                 max_seconds=max_seconds,
             )
         except ProtocolError as exc:
             raise SpecChainError(
                 exc.code,
-                f"invalid specification chain: {exc}",
+                f"invalid specification chain: {exc.message}",
                 step=exc.step,
+                context=exc.context,
             ) from exc
         revisions = tuple(_profile_revision(frame) for frame in verified)
         by_revision: dict[str, list[SpecRevision]] = {}
@@ -628,7 +884,11 @@ class SpecChain:
         by_payload_hash: dict[str, SpecRevision] = {}
         for revision in revisions:
             if revision.seq in by_seq:
-                _chain_fail("duplicate-seq", f"duplicate seq {revision.seq}")
+                _chain_fail(
+                    "duplicate-seq",
+                    f"duplicate seq {revision.seq}",
+                    context={"seq": revision.seq},
+                )
             if revision.frame_hash in by_frame_hash:
                 _chain_fail("duplicate-frame", "duplicate frame_hash")
             if revision.payload_hash in by_payload_hash:
@@ -648,16 +908,35 @@ class SpecChain:
                     _chain_fail(
                         "duplicate-revision",
                         f"revision label {revision.revision!r} addresses different bytes",
+                        context={"revision": revision.revision},
                     )
             aliases.append(revision)
             by_seq[revision.seq] = revision
             by_frame_hash[revision.frame_hash] = revision
             by_payload_hash[revision.payload_hash] = revision
         self._revisions = revisions
-        self._by_revision = by_revision
-        self._by_seq = by_seq
-        self._by_frame_hash = by_frame_hash
-        self._by_payload_hash = by_payload_hash
+        self._by_revision = MappingProxyType(
+            {label: tuple(values) for label, values in by_revision.items()}
+        )
+        self._by_seq = MappingProxyType(by_seq)
+        self._by_frame_hash = MappingProxyType(by_frame_hash)
+        self._by_payload_hash = MappingProxyType(by_payload_hash)
+
+    @classmethod
+    def from_frames(
+        cls,
+        frames: Iterable[FrameMapping],
+        *,
+        expected_stream_id: str | None = None,
+        max_seconds: float = DEFAULT_VERIFY_SECONDS,
+    ) -> "SpecChain":
+        """Verify an iterable of decoded frame mappings in chain order."""
+
+        return cls(
+            frames,
+            expected_stream_id=expected_stream_id,
+            max_seconds=max_seconds,
+        )
 
     @classmethod
     def from_jsonl(
@@ -668,6 +947,12 @@ class SpecChain:
         max_bytes: int = MAX_CHAIN_BYTES,
         max_seconds: float = DEFAULT_VERIFY_SECONDS,
     ) -> "SpecChain":
+        """Parse and verify UTF-8 JSONL bytes.
+
+        Text is intentionally not accepted here. Use ``from_jsonl_text()`` for
+        a deliberate UTF-8 text boundary or ``load()`` for a path.
+        """
+
         if not isinstance(data, (bytes, bytearray, memoryview)):
             raise TypeError("SpecChain.from_jsonl accepts bytes")
         if type(max_bytes) is not int or max_bytes < 0:
@@ -678,12 +963,28 @@ class SpecChain:
                 "chain-size-exceeded",
                 f"chain exceeds {max_bytes} bytes",
                 step="size",
+                context={"actual_bytes": len(octets), "max_bytes": max_bytes},
             )
-        lines = octets.splitlines()
+        if not octets:
+            _chain_fail("empty-chain", "specification chain is empty")
+        ended_with_lf = octets.endswith(b"\n")
+        lines = octets.split(b"\n")
+        if lines[-1] == b"":
+            lines.pop()
         if not lines:
             _chain_fail("empty-chain", "specification chain is empty")
-        frames: list[dict[str, Any]] = []
-        for number, line in enumerate(lines, start=1):
+        frames: list[Frame] = []
+        for number, raw_line in enumerate(lines, start=1):
+            lf_terminated = number < len(lines) or ended_with_lf
+            has_crlf = raw_line.endswith(b"\r") and lf_terminated
+            line = raw_line[:-1] if has_crlf else raw_line
+            if b"\r" in line:
+                _chain_fail(
+                    "invalid-line-ending",
+                    f"chain line {number} contains a bare carriage return",
+                    step="jsonl",
+                    context={"line": number},
+                )
             if not line.strip():
                 _chain_fail(
                     "blank-chain-line",
@@ -695,8 +996,9 @@ class SpecChain:
             except ProtocolError as exc:
                 raise SpecChainError(
                     exc.code,
-                    f"invalid chain line {number}: {exc}",
+                    f"invalid chain line {number}: {exc.message}",
                     step=exc.step or "jsonl",
+                    context={**dict(exc.context), "line": number},
                 ) from exc
             if type(value) is not dict:
                 _chain_fail(
@@ -712,22 +1014,58 @@ class SpecChain:
         )
 
     @classmethod
-    def load(
+    def from_jsonl_text(
         cls,
-        path: str | os.PathLike[str],
+        text: str,
         *,
         expected_stream_id: str | None = None,
         max_bytes: int = MAX_CHAIN_BYTES,
         max_seconds: float = DEFAULT_VERIFY_SECONDS,
     ) -> "SpecChain":
+        """Encode text as strict UTF-8, then parse and verify its JSONL."""
+
+        if not isinstance(text, str):
+            raise TypeError("SpecChain.from_jsonl_text accepts text")
+        try:
+            data = text.encode("utf-8", errors="strict")
+        except UnicodeEncodeError as exc:
+            raise SpecChainError(
+                "invalid-utf8",
+                "JSONL text contains an unpaired surrogate",
+                step="jsonl",
+            ) from exc
+        return cls.from_jsonl(
+            data,
+            expected_stream_id=expected_stream_id,
+            max_bytes=max_bytes,
+            max_seconds=max_seconds,
+        )
+
+    @classmethod
+    def load(
+        cls,
+        path: StrPath,
+        *,
+        expected_stream_id: str | None = None,
+        max_bytes: int = MAX_CHAIN_BYTES,
+        max_seconds: float = DEFAULT_VERIFY_SECONDS,
+    ) -> "SpecChain":
+        """Read and verify a chain from a text ``str``/``PathLike`` path."""
+
         if type(max_bytes) is not int or max_bytes < 0:
             raise ValueError("max_bytes must be a non-negative integer")
-        source = Path(path)
-        if source.stat().st_size > max_bytes:
+        source = _path_from(path, name="path")
+        source_size = source.stat().st_size
+        if source_size > max_bytes:
             _chain_fail(
                 "chain-size-exceeded",
                 f"chain exceeds {max_bytes} bytes",
                 step="size",
+                context={
+                    "actual_bytes": source_size,
+                    "max_bytes": max_bytes,
+                    "path": str(source),
+                },
             )
         with source.open("rb") as stream:
             data = stream.read(max_bytes + 1)
@@ -741,20 +1079,54 @@ class SpecChain:
     def __len__(self) -> int:
         return len(self._revisions)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[SpecRevision]:
         return iter(self._revisions)
+
+    @overload
+    def __getitem__(self, index: int) -> SpecRevision: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> tuple[SpecRevision, ...]: ...
+
+    def __getitem__(
+        self, index: int | slice
+    ) -> SpecRevision | tuple[SpecRevision, ...]:
+        return self._revisions[index]
+
+    def __repr__(self) -> str:
+        return (
+            f"SpecChain(stream_id={self.stream_id!r}, revisions={len(self)}, "
+            f"head_seq={self.head.seq}, head_frame_hash={self.head.frame_hash!r})"
+        )
 
     @property
     def revisions(self) -> tuple[SpecRevision, ...]:
+        """All verified revisions in ascending sequence order."""
+
         return self._revisions
 
     @property
     def head(self) -> SpecRevision:
+        """The highest verified revision."""
+
         return self._revisions[-1]
+
+    @property
+    def stream_id(self) -> str:
+        """The single stream identifier shared by every revision."""
+
+        return self.head.stream_id
+
+    def to_jsonl_bytes(self) -> bytes:
+        """Serialize every frame as deterministic canonical UTF-8 JSONL."""
+
+        return b"".join(
+            revision.to_json_bytes() + b"\n" for revision in self._revisions
+        )
 
     def resolve(
         self,
-        selector: str | int | None = None,
+        selector: RevisionSelector | None = None,
         *,
         revision: str | None = None,
         seq: int | None = None,
@@ -762,6 +1134,34 @@ class SpecChain:
         payload_hash: str | None = None,
         head: bool = False,
     ) -> SpecRevision:
+        """Resolve one revision by label, sequence, hash, or ``"head"``.
+
+        With no selector, the verified head is returned. A 64-hex positional
+        selector checks ``frame_hash`` first and then ``payload_hash``.
+        """
+
+        if selector is not None and type(selector) not in (str, int):
+            raise TypeError("selector must be text, int, or None")
+        if type(head) is not bool:
+            raise TypeError("head must be bool")
+        for name, value in (
+            ("revision", revision),
+            ("frame_hash", frame_hash),
+            ("payload_hash", payload_hash),
+        ):
+            if value is not None and not isinstance(value, str):
+                raise TypeError(f"{name} must be text or None")
+        for name, value in (
+            ("frame_hash", frame_hash),
+            ("payload_hash", payload_hash),
+        ):
+            if value is not None and _HEX64_RE.fullmatch(value) is None:
+                raise SpecResolutionError(
+                    "invalid-selector",
+                    f"{name} must be 64 lowercase hex",
+                    step="resolve",
+                    context={name: value},
+                )
         supplied = sum(
             value is not None
             for value in (selector, revision, seq, frame_hash, payload_hash)
@@ -784,6 +1184,7 @@ class SpecChain:
                         "unknown-revision",
                         "no frame or payload hash matches the selector",
                         step="resolve",
+                        context={"selector": selector},
                     )
                 return result
             else:
@@ -795,6 +1196,7 @@ class SpecChain:
                     "unknown-revision",
                     f"unknown revision label {revision!r}",
                     step="resolve",
+                    context={"revision": revision},
                 )
             return matches[-1]
         if seq is not None:
@@ -810,12 +1212,17 @@ class SpecChain:
                 "unknown-revision",
                 "no specification revision matches the selector",
                 step="resolve",
+                context={
+                    "seq": seq,
+                    "frame_hash": frame_hash,
+                    "payload_hash": payload_hash,
+                },
             )
         return result
 
     def materialize(
         self,
-        selector: str | int | None = None,
+        selector: RevisionSelector | None = None,
         *,
         revision: str | None = None,
         seq: int | None = None,
@@ -825,6 +1232,15 @@ class SpecChain:
         cache: ContentAddressedCache | None = None,
         offline: bool = False,
     ) -> bytes:
+        """Return verified normative bytes for one revision.
+
+        The return type is always ``bytes``. Decode explicitly only after
+        checking ``SpecRevision.media_type``. Inline bytes are preferred,
+        followed by a verified cache object, then an immutable source fetch.
+        """
+
+        if type(offline) is not bool:
+            raise TypeError("offline must be bool")
         selected = self.resolve(
             selector,
             revision=revision,
@@ -853,6 +1269,11 @@ class SpecChain:
                 "uncached-revision",
                 "revision is unavailable while offline and absent from cache",
                 step="resolve",
+                context={
+                    "frame_hash": selected.frame_hash,
+                    "revision": selected.revision,
+                    "seq": selected.seq,
+                },
             )
         immutable_source = source or GitHubRawSource()
         repository = selected.repository
@@ -882,12 +1303,23 @@ class SpecChain:
                 "normative-size-mismatch",
                 "resolved specification byte count does not match the frame",
                 step="verify",
+                context={
+                    "actual_bytes": len(data),
+                    "expected_bytes": selected.normative_bytes,
+                    "frame_hash": selected.frame_hash,
+                },
             )
-        if hashlib.sha256(data).hexdigest() != selected.normative_sha256:
+        actual_sha256 = hashlib.sha256(data).hexdigest()
+        if actual_sha256 != selected.normative_sha256:
             raise SpecResolutionError(
                 "normative-hash-mismatch",
                 "resolved specification checksum does not match the frame",
                 step="verify",
+                context={
+                    "actual_sha256": actual_sha256,
+                    "expected_sha256": selected.normative_sha256,
+                    "frame_hash": selected.frame_hash,
+                },
             )
         if cache is not None:
             cache.put(
@@ -903,13 +1335,28 @@ def build_spec_revision_frame(
     revision: str,
     text: str,
     utc: str,
-    head: SpecRevision | Mapping[str, Any] | None = None,
+    head: SpecRevision | FrameMapping | None = None,
     stream_id: str | None = None,
     kind: str = "body.pulse",
     media_type: str = "text/markdown; charset=utf-8",
-    payload_extra: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Build a self-contained specification revision extending ``head``."""
+    payload_extra: Mapping[str, JsonValue] | None = None,
+) -> Frame:
+    """Build a self-contained specification revision extending ``head``.
+
+    ``text`` is encoded as strict UTF-8 and embedded with its raw SHA-256 and
+    byte count. The caller must serialize concurrent appends; a supplied head
+    is validated but never repaired or reparented.
+
+    Example:
+        >>> frame = build_spec_revision_frame(
+        ...     revision="rev-1",
+        ...     text="# RAPP/1\\n",
+        ...     utc="2026-08-30T00:00:00.000Z",
+        ...     stream_id="rappid:@example/spec:" + "0" * 64,
+        ... )
+        >>> frame["payload"]["normative"]["bytes"]
+        9
+    """
 
     if type(revision) is not str or _REVISION_RE.fullmatch(revision) is None:
         _chain_fail("invalid-revision", "revision label is invalid", step="build")
@@ -972,8 +1419,9 @@ def build_spec_revision_frame(
         except ProtocolError as exc:
             raise SpecChainError(
                 exc.code,
-                f"invalid revision head: {exc}",
+                f"invalid revision head: {exc.message}",
                 step=exc.step,
+                context=exc.context,
             ) from exc
         if stream_id is not None and stream_id != head_frame.get("stream_id"):
             _chain_fail(
@@ -1002,8 +1450,9 @@ def build_spec_revision_frame(
     except ProtocolError as exc:
         raise SpecChainError(
             exc.code,
-            f"invalid specification revision: {exc}",
+            f"invalid specification revision: {exc.message}",
             step=exc.step,
+            context=exc.context,
         ) from exc
     if head_frame is not None and frame["utc"] < head_frame["utc"]:
         _chain_fail(
@@ -1016,26 +1465,31 @@ def build_spec_revision_frame(
     except ProtocolError as exc:
         raise SpecChainError(
             exc.code,
-            f"invalid specification revision: {exc}",
+            f"invalid specification revision: {exc.message}",
             step=exc.step,
+            context=exc.context,
         ) from exc
     _profile_revision(frame)
     return frame
 
 
-__all__ = [
+__all__ = (
     "ByteFetcher",
     "CacheIntegrityError",
     "ContentAddressedCache",
     "DEFAULT_ALLOWED_FETCH_HOSTS",
+    "DEFAULT_FETCH_SECONDS",
     "GitHubRawSource",
     "HTTPSFetcher",
     "ImmutableSource",
     "MAX_CHAIN_BYTES",
     "MAX_SPEC_BYTES",
+    "RevisionAddress",
+    "RevisionSelector",
     "SpecChain",
     "SpecChainError",
     "SpecResolutionError",
     "SpecRevision",
+    "StrPath",
     "build_spec_revision_frame",
-]
+)
