@@ -1,2 +1,4 @@
-include tests/__init__.py tests/authority_fixture.py tests/live_authority_refresh.py
+include tests/__init__.py tests/authority_fixture.py
+include tests/distribution_install_smoke.py tests/live_authority_refresh.py
+include src/rapp_sdk/schemas/*.json
 recursive-include tests/fixtures *.gz *.json *.md

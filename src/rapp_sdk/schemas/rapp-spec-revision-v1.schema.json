@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/kody-w/rapp-sdk/raw/main/schemas/rapp-spec-revision-v1.schema.json",
+  "$id": "urn:rapp:schema:spec-revision:1",
   "title": "RAPP specification revision payload profile",
   "description": "Payload profile carried by a RAPP/1 frame. The eleven-key RAPP/1 envelope is intentionally not redefined here.",
   "type": "object",

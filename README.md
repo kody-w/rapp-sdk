@@ -50,6 +50,7 @@ checksum-revalidating content-addressed cache. See
   `build_spec_revision_frame`
 - Resolution: `ImmutableSource`, `GitHubRawSource`, `HTTPSFetcher`,
   `ContentAddressedCache`
+- Schema: `SPEC_REVISION_SCHEMA_ID`, `read_spec_revision_schema`
 - Errors: `RappSDKError`, `ProtocolError`, `SpecChainError`,
   `SpecResolutionError`, `CacheIntegrityError`
 
@@ -65,9 +66,18 @@ PYTHONPATH=src python3 examples/spec_chain_smoke.py
 Package smoke, when the standard build frontend is available:
 
 ```console
-python3 -m build --wheel --no-isolation --outdir .build-artifacts
-python3 -m pip install --no-deps --target .install-smoke \
-  .build-artifacts/rapp_sdk-0.1.0-py3-none-any.whl
+python3 -m build --no-isolation --outdir .build-artifacts
+python3 tests/distribution_install_smoke.py \
+  .build-artifacts/rapp_sdk-0.1.0-py3-none-any.whl \
+  .build-artifacts/rapp_sdk-0.1.0.tar.gz
+```
+
+The versioned payload schema is canonical inside the package:
+
+```python
+from rapp_sdk import read_spec_revision_schema
+
+schema_bytes = read_spec_revision_schema()
 ```
 
 The default offline test suite includes a checksum-pinned authority fixture

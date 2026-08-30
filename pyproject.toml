@@ -37,9 +37,9 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 rapp_sdk = ["py.typed"]
+"rapp_sdk.schemas" = ["*.json"]
 
 [tool.setuptools.data-files]
 "share/rapp-sdk" = ["DISCLAIMER.md"]
 "share/rapp-sdk/docs" = ["docs/spec-chain.md"]
 "share/rapp-sdk/examples" = ["examples/spec_chain_smoke.py"]
-"share/rapp-sdk/schemas" = ["schemas/rapp-spec-revision-v1.schema.json"]

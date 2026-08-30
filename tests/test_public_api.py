@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import inspect
 import io
+import json
 import shutil
 import subprocess
 import sys
@@ -22,6 +24,8 @@ from rapp_sdk import (
     ProtocolError,
     RappSDKError,
     RevisionAddress,
+    SPEC_REVISION_SCHEMA_ID,
+    SPEC_REVISION_SCHEMA_RESOURCE,
     SpecChain,
     SpecChainError,
     SpecResolutionError,
@@ -29,6 +33,7 @@ from rapp_sdk import (
     build_frame,
     build_spec_revision_frame,
     canonicalize,
+    read_spec_revision_schema,
     strict_json_loads,
     verify_frame,
     verify_stream,
@@ -79,6 +84,7 @@ class PublicAPITests(unittest.TestCase):
             verify_frame,
             verify_stream,
             build_spec_revision_frame,
+            read_spec_revision_schema,
             SpecChain.from_frames,
             SpecChain.from_jsonl,
             SpecChain.from_jsonl_text,
@@ -102,6 +108,21 @@ class PublicAPITests(unittest.TestCase):
                         parameter.name,
                     )
                 self.assertTrue(get_type_hints(function))
+
+    def test_schema_is_a_canonical_package_resource(self) -> None:
+        resource = files("rapp_sdk").joinpath(
+            f"schemas/{SPEC_REVISION_SCHEMA_RESOURCE}"
+        )
+        self.assertTrue(resource.is_file())
+        source_bytes = resource.read_bytes()
+        self.assertEqual(read_spec_revision_schema(), source_bytes)
+        self.assertEqual(
+            hashlib.sha256(source_bytes).hexdigest(),
+            "c3114ccb0b3e57b7c5ea07e0392df433534fe17114010ba5869130ea51e8eb5a",
+        )
+        schema = json.loads(source_bytes)
+        self.assertEqual(schema["$id"], SPEC_REVISION_SCHEMA_ID)
+        self.assertEqual(SPEC_REVISION_SCHEMA_ID, "urn:rapp:schema:spec-revision:1")
 
     def test_error_diagnostics_are_actionable_and_immutable(self) -> None:
         frame = build_spec_revision_frame(

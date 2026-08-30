@@ -30,6 +30,11 @@ from .protocol import (
     verify_frame,
     verify_stream,
 )
+from .schemas import (
+    SPEC_REVISION_SCHEMA_ID,
+    SPEC_REVISION_SCHEMA_RESOURCE,
+    read_spec_revision_schema,
+)
 from .spec_chain import (
     ByteFetcher,
     ContentAddressedCache,
@@ -67,6 +72,8 @@ __all__ = (
     "RevisionAddress",
     "RevisionSelector",
     "SPEC",
+    "SPEC_REVISION_SCHEMA_ID",
+    "SPEC_REVISION_SCHEMA_RESOURCE",
     "SignatureVerifier",
     "SpecChain",
     "SpecChainError",
@@ -81,6 +88,7 @@ __all__ = (
     "build_spec_revision_frame",
     "canonical",
     "canonicalize",
+    "read_spec_revision_schema",
     "strict_json_loads",
     "verify_frame",
     "verify_stream",

@@ -57,6 +57,30 @@ except RappSDKError as error:
 Importing the package is inert: it performs no filesystem access, network
 access, environment reads, logging, or package-metadata discovery.
 
+## Schema resource
+
+The canonical payload schema ships at
+`rapp_sdk/schemas/rapp-spec-revision-v1.schema.json`. Its stable semantic
+identity is `urn:rapp:schema:spec-revision:1`; a mutable repository branch URL
+is not used as normative identity.
+
+```python
+import json
+from importlib.resources import files
+from rapp_sdk import read_spec_revision_schema
+
+resource = files("rapp_sdk").joinpath(
+    "schemas/rapp-spec-revision-v1.schema.json"
+)
+assert resource.is_file()
+assert resource.read_bytes() == read_spec_revision_schema()
+schema = json.loads(read_spec_revision_schema())
+```
+
+There is no second editable presentation copy. Wheel and source-distribution
+smoke tests install into separate virtual environments and require the
+installed resource to parse and byte-match this canonical source.
+
 ## Offline authority parity
 
 The source distribution carries a deterministic gzip fixture pinned to the
