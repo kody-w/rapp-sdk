@@ -103,7 +103,9 @@ schema_bytes = read_spec_revision_schema()
 ```
 
 The default offline test suite includes a checksum-pinned authority fixture
-and verifies all 14 frames plus the exact rev-13 normative bytes:
+selected at owner-ratified rev-14. It verifies all 15 frames, the accepted
+rev-14 frame/payload/normative/bootstrap hashes, and historical rev-13
+resolution:
 
 ```console
 python3 -m unittest discover -v

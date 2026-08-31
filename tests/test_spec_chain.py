@@ -21,7 +21,6 @@ from rapp_sdk import (
     build_spec_revision_frame,
     canonicalize,
     read_spec_revision_schema,
-    strict_json_loads,
 )
 from rapp_sdk.protocol import H, PARTICLE_SPACE, WAVE_SPACE
 from rapp_sdk.resolution import (
@@ -29,10 +28,14 @@ from rapp_sdk.resolution import (
     GitHubRevisionSource,
 )
 from tests.authority_fixture import (
-    PINNED_AUTHORITY_COMMIT,
-    PINNED_CHAIN_SHA256,
-    PINNED_SPEC_SHA256,
-    pinned_fixture,
+    HISTORICAL_REV13_SHA256,
+    SELECTED_AUTHORITY_COMMIT,
+    SELECTED_BOOTSTRAP_SHA256,
+    SELECTED_FRAME_HASH,
+    SELECTED_PAYLOAD_HASH,
+    SELECTED_SPEC_SHA256,
+    selected_fixture,
+    selected_policies,
 )
 
 RID = "rappid:@example/spec-chain:" + "1" * 64
@@ -390,22 +393,13 @@ class SpecChainTests(unittest.TestCase):
         self.assertEqual(traversal.exception.code, "unsafe-path")
 
 
-class PinnedAuthorityCompatibilityTests(unittest.TestCase):
-    def test_all_frames_and_current_normative_bytes_offline(self) -> None:
-        manifest, chain_bytes, spec_bytes = pinned_fixture()
-        first = strict_json_loads(chain_bytes.split(b"\n", 1)[0])
-        self.assertIsInstance(first, dict)
-        registry = KindFamilyRegistry(
-            {"body.pulse": "body"},
-            genesis_hashes={first["stream_id"]: first["frame_hash"]},
-            verified=True,
-            registry_id=f"rapp-1@{PINNED_AUTHORITY_COMMIT}",
+class SelectedAuthorityCompatibilityTests(unittest.TestCase):
+    def test_rev14_selected_and_rev13_historical_resolution_offline(self) -> None:
+        manifest, chain_bytes, spec_bytes, rev13_bytes, bootstrap = (
+            selected_fixture()
         )
-        trust = StreamTrustPolicy(
-            stream_id=first["stream_id"],
-            trusted_genesis_hash=first["frame_hash"],
-        )
-        source = MappingRevisionSource(spec_bytes)
+        registry, trust = selected_policies(manifest, bootstrap)
+        historical_source = MappingRevisionSource(rev13_bytes)
         with mock.patch(
             "urllib.request.OpenerDirector.open",
             side_effect=AssertionError("network access is forbidden"),
@@ -418,14 +412,19 @@ class PinnedAuthorityCompatibilityTests(unittest.TestCase):
                 registry=registry,
                 trust_policy=trust,
             )
-            resolved = SpecResolver(chain, source=source).read(chain.head)
+            selected = SpecResolver(chain).read(chain.head)
+            rev13 = chain.resolve(revision="rev-13")
+            historical = SpecResolver(
+                chain,
+                source=historical_source,
+            ).read(rev13)
 
         self.assertTrue(chain.trusted)
-        self.assertEqual(len(chain), 14)
-        self.assertEqual([item.seq for item in chain], list(range(14)))
+        self.assertEqual(len(chain), 15)
+        self.assertEqual([item.seq for item in chain], list(range(15)))
         self.assertEqual(
             hashlib.sha256(chain_bytes).hexdigest(),
-            PINNED_CHAIN_SHA256,
+            manifest["chain"]["sha256"],
         )
         actual = [
             {
@@ -439,11 +438,63 @@ class PinnedAuthorityCompatibilityTests(unittest.TestCase):
             for item in chain
         ]
         self.assertEqual(actual, manifest["frames"])
-        self.assertEqual(chain.head.revision, "rev-13")
-        self.assertEqual(chain.head.normative_bytes, 65569)
-        self.assertEqual(chain.head.normative_sha256, PINNED_SPEC_SHA256)
-        self.assertEqual(resolved, spec_bytes)
-        self.assertEqual(hashlib.sha256(resolved).hexdigest(), PINNED_SPEC_SHA256)
+        self.assertEqual(manifest["authority_merge_commit"], SELECTED_AUTHORITY_COMMIT)
+        self.assertEqual(chain.head.revision, "rev-14")
+        self.assertEqual(chain.head.seq, 14)
+        self.assertEqual(chain.head.frame_hash, SELECTED_FRAME_HASH)
+        self.assertEqual(chain.head.payload_hash, SELECTED_PAYLOAD_HASH)
+        self.assertEqual(chain.head.normative_bytes, 78183)
+        self.assertEqual(chain.head.normative_sha256, SELECTED_SPEC_SHA256)
+        self.assertEqual(selected, spec_bytes)
+        self.assertEqual(
+            hashlib.sha256(selected).hexdigest(),
+            SELECTED_SPEC_SHA256,
+        )
+        self.assertEqual(
+            hashlib.sha256(bootstrap).hexdigest(),
+            SELECTED_BOOTSTRAP_SHA256,
+        )
+        bootstrap_profile = json.loads(bootstrap)
+        self.assertEqual(
+            bootstrap_profile["schema"],
+            "rapp-anchor-bootstrap/1",
+        )
+        self.assertEqual(
+            bootstrap_profile["authority"]["protected_ref"],
+            "refs/heads/main",
+        )
+        self.assertEqual(
+            registry.registry_id,
+            f"sha256:{SELECTED_BOOTSTRAP_SHA256}",
+        )
+        self.assertEqual(trust.prior_head.seq, 14)
+        self.assertEqual(trust.prior_head.frame_hash, SELECTED_FRAME_HASH)
+        self.assertEqual(trust.number_profile, "exact-integer")
+        self.assertEqual(rev13.seq, 13)
+        self.assertEqual(rev13.normative_bytes, 65569)
+        self.assertEqual(rev13.normative_sha256, HISTORICAL_REV13_SHA256)
+        self.assertEqual(historical, rev13_bytes)
+        self.assertEqual(
+            historical_source.calls[0][0].attributes["commit"],
+            "5e30f66396f4cd125bce5718b1fef92d8d3ddab8",
+        )
+        self.assertEqual(
+            historical_source.calls[0][0].attributes["path"],
+            "SPEC.md",
+        )
+        self.assertEqual(historical_source.calls[0][1], 65569)
+
+    def test_selected_policy_refuses_rev13_stale_prefix(self) -> None:
+        manifest, chain_bytes, _, _, bootstrap = selected_fixture()
+        registry, trust = selected_policies(manifest, bootstrap)
+        stale_prefix = b"\n".join(chain_bytes.splitlines()[:14]) + b"\n"
+        with self.assertRaises(SpecChainError) as stale:
+            SpecChain.from_jsonl(
+                stale_prefix,
+                registry=registry,
+                trust_policy=trust,
+            )
+        self.assertEqual(stale.exception.code, "head-rollback")
 
 
 if __name__ == "__main__":

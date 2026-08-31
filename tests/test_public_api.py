@@ -154,13 +154,13 @@ class PublicAPITests(unittest.TestCase):
 
     def test_diagnostic_code_catalog_is_stable(self) -> None:
         self.assertEqual(DIAGNOSTIC_CATALOG_VERSION, "1")
-        self.assertEqual(len(DIAGNOSTIC_CODES), 99)
+        self.assertEqual(len(DIAGNOSTIC_CODES), 100)
         self.assertEqual(DIAGNOSTIC_CODES, tuple(sorted(DIAGNOSTIC_CODES)))
         self.assertEqual(
             hashlib.sha256(
                 ("\n".join(DIAGNOSTIC_CODES) + "\n").encode()
             ).hexdigest(),
-            "959f62aea1d40461be0dfe6e4e9f50e36c37194f5861ab929c3b6a8a507171a4",
+            "ee73afb983fe75ee0b4e9617e23f76e339a7a48b84768d7e78dc0e7463a269e7",
         )
 
     def test_golden_callables_are_fully_annotated(self) -> None:
@@ -210,7 +210,8 @@ class PublicAPITests(unittest.TestCase):
                 "(stream_id: 'str', trusted_genesis_hash: 'str', "
                 "prior_head: 'PersistedHead | None' = None, "
                 "approved_re_genesis_hashes: 'frozenset[str]' = "
-                "frozenset()) -> None"
+                "frozenset(), number_profile: 'str' = "
+                "'rfc8785-binary64') -> None"
             ),
             build_frame_mapping: (
                 "(kind: 'str', stream_id: 'str', seq: 'int', utc: 'str', "
@@ -282,6 +283,7 @@ class PublicAPITests(unittest.TestCase):
                 "trusted_genesis_hash",
                 "prior_head",
                 "approved_re_genesis_hashes",
+                "number_profile",
             ),
             VerifiedFrame: (
                 "spec",

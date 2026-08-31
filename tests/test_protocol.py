@@ -420,6 +420,30 @@ class VerificationTests(unittest.TestCase):
         )
         self.assertTrue(approved.trusted)
 
+    def test_trust_policy_can_apply_bootstrap_exact_integer_profile(self) -> None:
+        first = genesis({"binary64": 0.1})
+        policy = registry(first["frame_hash"])
+        self.assertTrue(
+            verify_stream(
+                [first],
+                registry=policy,
+                trust_policy=trust(first),
+            ).trusted
+        )
+        exact_integer = check_stream(
+            [first],
+            registry=policy,
+            trust_policy=StreamTrustPolicy(
+                stream_id=RID,
+                trusted_genesis_hash=first["frame_hash"],
+                number_profile="exact-integer",
+            ),
+        )
+        self.assertEqual(
+            exact_integer.diagnostics[-1].code,
+            "trust-number-profile-mismatch",
+        )
+
     def test_infinite_iterator_and_zero_time_are_bounded(self) -> None:
         first = genesis()
         produced = 0

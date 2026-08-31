@@ -86,6 +86,7 @@ DIAGNOSTIC_CODES = (
     "source-required",
     "spec-size-exceeded",
     "stream-binding-mismatch",
+    "trust-number-profile-mismatch",
     "trust-policy-required",
     "trust-stream-mismatch",
     "trusted-genesis-mismatch",

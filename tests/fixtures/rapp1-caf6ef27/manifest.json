@@ -1,11 +1,11 @@
 {
-  "authority_commit": "bfa0706a4dd448b98b59c68aece0761d625923cb",
+  "authority_merge_commit": "caf6ef276cafa92aa744499af90dc1a28559941a",
   "chain": {
-    "bytes": 104831,
-    "frames": 14,
-    "gzip_bytes": 9207,
-    "gzip_sha256": "c5e51755a56ecdc57c3f92d789e3137246c92524d19531d8ad5991026befec3c",
-    "sha256": "e6c9583953acedcbb56604042dd3b5941ff8b8a4a999ae91ebfd73cdbb1d0f7c",
+    "bytes": 196708,
+    "frames": 15,
+    "gzip_bytes": 39073,
+    "gzip_sha256": "f29c63a8469fda082e7ce330ac4fa3f3781369022b4f1caa06d78e384537a79f",
+    "sha256": "6974a0bd5f6344f72b728efed0a154109be8769ef4d956a827701d9b222f6018",
     "source_path": "anchor/chain.jsonl"
   },
   "frames": [
@@ -120,15 +120,41 @@
       "payload_hash": "78a89c06509b5100494b9c7e0f551acdc6209fd90aded734321f3580b0f07051",
       "revision": "rev-13",
       "seq": 13
+    },
+    {
+      "frame_hash": "59629adab4e26d156f3d66ecfb766e08705919ea1d2adc92ba0ad2b17337dfc2",
+      "normative_bytes": 78183,
+      "normative_sha256": "d345235be5bc698d78c5893285abd09f2e62a398f781123d1de8da313a01c7de",
+      "payload_hash": "c7549bbd3e133b833930e24e008817ea295734b870f41706455d3f45821aba3a",
+      "revision": "rev-14",
+      "seq": 14
     }
   ],
-  "normative": {
-    "bytes": 65569,
-    "gzip_bytes": 24826,
-    "gzip_sha256": "bac83626f5f0e489c267da0d5a0cb8be539265225d52ce8af5c94dff7054f458",
-    "pointer_commit": "5e30f66396f4cd125bce5718b1fef92d8d3ddab8",
-    "sha256": "e5abd6a32801761fdd5c151a4f90fa4c989b545da02d3cd26dfc4765fab8409a",
-    "source_path": "SPEC.md"
+  "historical": {
+    "rev-13": {
+      "frame_hash": "bbcee75ebbbf82d11d8ffd666fdda34c8233642de6d6e4f45910d43a24a001e3",
+      "normative_bytes": 65569,
+      "normative_gzip_bytes": 24826,
+      "normative_gzip_sha256": "bac83626f5f0e489c267da0d5a0cb8be539265225d52ce8af5c94dff7054f458",
+      "normative_sha256": "e5abd6a32801761fdd5c151a4f90fa4c989b545da02d3cd26dfc4765fab8409a",
+      "payload_hash": "78a89c06509b5100494b9c7e0f551acdc6209fd90aded734321f3580b0f07051",
+      "pointer_commit": "5e30f66396f4cd125bce5718b1fef92d8d3ddab8",
+      "pointer_path": "SPEC.md",
+      "seq": 13
+    }
   },
-  "schema": "rapp-sdk-authority-fixture/1"
+  "schema": "rapp-sdk-authority-fixture/2",
+  "selected": {
+    "bootstrap_profile_bytes": 1731,
+    "bootstrap_profile_path": "anchor/bootstrap/sha256-1666e44acf532f854d4bf74868c9af9f9b362055692189ac858a7c8b52dcd5bb.json",
+    "bootstrap_profile_sha256": "1666e44acf532f854d4bf74868c9af9f9b362055692189ac858a7c8b52dcd5bb",
+    "frame_hash": "59629adab4e26d156f3d66ecfb766e08705919ea1d2adc92ba0ad2b17337dfc2",
+    "normative_bytes": 78183,
+    "normative_gzip_bytes": 29223,
+    "normative_gzip_sha256": "11faa8bf14bff2fa03fa2fdad1a01700aa512517e2d477ac8fff6f51777b5f46",
+    "normative_sha256": "d345235be5bc698d78c5893285abd09f2e62a398f781123d1de8da313a01c7de",
+    "payload_hash": "c7549bbd3e133b833930e24e008817ea295734b870f41706455d3f45821aba3a",
+    "revision": "rev-14",
+    "seq": 14
+  }
 }

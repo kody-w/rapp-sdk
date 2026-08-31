@@ -37,6 +37,8 @@ MAX_JSON_DEPTH = 64
 MAX_STREAM_FRAMES = 100_000
 MAX_SAFE_INTEGER = (1 << 53) - 1
 DEFAULT_VERIFY_SECONDS = 5.0
+NUMBER_PROFILE_BINARY64 = "rfc8785-binary64"
+NUMBER_PROFILE_EXACT_INTEGER = "exact-integer"
 
 FRAME_KEYS = frozenset(
     {
@@ -858,6 +860,7 @@ class StreamTrustPolicy:
     trusted_genesis_hash: str
     prior_head: PersistedHead | None = None
     approved_re_genesis_hashes: frozenset[str] = frozenset()
+    number_profile: str = NUMBER_PROFILE_BINARY64
 
     def __post_init__(self) -> None:
         _stream_family(self.stream_id)
@@ -866,6 +869,11 @@ class StreamTrustPolicy:
             PersistedHead,
         ):
             raise TypeError("prior_head must be PersistedHead or None")
+        if self.number_profile not in {
+            NUMBER_PROFILE_BINARY64,
+            NUMBER_PROFILE_EXACT_INTEGER,
+        }:
+            raise ValueError("number_profile is not supported")
         _validate_hash(
             self.trusted_genesis_hash,
             field_name="trusted_genesis_hash",
@@ -1447,6 +1455,16 @@ def _trust_diagnostic(
                 operation="trust-stream",
                 location="frame[0]",
             )
+    if trust_policy.number_profile == NUMBER_PROFILE_EXACT_INTEGER:
+        for index, frame in enumerate(stream.frames):
+            if _contains_non_exact_integer(frame.to_dict()):
+                return _diagnostic(
+                    "trust-number-profile-mismatch",
+                    "stream contains numbers forbidden by trust policy",
+                    operation="trust-stream",
+                    location=f"frame[{index}]",
+                    remediation="use only uint53/int53 numbers in this authority",
+                )
     prior = trust_policy.prior_head
     if prior is None:
         return None
@@ -1475,6 +1493,18 @@ def _trust_diagnostic(
             },
         )
     return None
+
+
+def _contains_non_exact_integer(value: JsonValue) -> bool:
+    if type(value) is float:
+        return True
+    if type(value) is int:
+        return not -MAX_SAFE_INTEGER <= value <= MAX_SAFE_INTEGER
+    if type(value) is list:
+        return any(_contains_non_exact_integer(item) for item in value)
+    if type(value) is dict:
+        return any(_contains_non_exact_integer(item) for item in value.values())
+    return False
 
 
 def _check_stream(
@@ -1795,6 +1825,8 @@ __all__ = (
     "MAX_JSON_DEPTH",
     "MAX_SAFE_INTEGER",
     "MAX_STREAM_FRAMES",
+    "NUMBER_PROFILE_BINARY64",
+    "NUMBER_PROFILE_EXACT_INTEGER",
     "PARTICLE_SPACE",
     "PROTOCOL_VERSION",
     "PersistedHead",

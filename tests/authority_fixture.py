@@ -1,4 +1,4 @@
-"""Integrity-checked access to the committed RAPP/1 authority fixture."""
+"""Integrity-checked selected and historical RAPP/1 authority fixtures."""
 
 from __future__ import annotations
 
@@ -7,23 +7,43 @@ import hashlib
 import io
 from pathlib import Path
 
-from rapp_sdk import strict_json_loads
+from rapp_sdk import (
+    KindFamilyRegistry,
+    PersistedHead,
+    StreamTrustPolicy,
+    strict_json_loads,
+)
 
-FIXTURE_ROOT = Path(__file__).resolve().parent / "fixtures" / "rapp1-bfa0706"
-PINNED_AUTHORITY_COMMIT = "bfa0706a4dd448b98b59c68aece0761d625923cb"
-PINNED_MANIFEST_SHA256 = (
-    "27cbd6380a6a0dfdd2effb96c93c50322fb149306d60c9e32501c93694ea197d"
+FIXTURE_ROOT = Path(__file__).resolve().parent / "fixtures" / "rapp1-caf6ef27"
+SELECTED_AUTHORITY_COMMIT = "caf6ef276cafa92aa744499af90dc1a28559941a"
+SELECTED_FRAME_HASH = (
+    "59629adab4e26d156f3d66ecfb766e08705919ea1d2adc92ba0ad2b17337dfc2"
 )
-PINNED_CHAIN_SHA256 = (
-    "e6c9583953acedcbb56604042dd3b5941ff8b8a4a999ae91ebfd73cdbb1d0f7c"
+SELECTED_PAYLOAD_HASH = (
+    "c7549bbd3e133b833930e24e008817ea295734b870f41706455d3f45821aba3a"
 )
-PINNED_CHAIN_GZIP_SHA256 = (
-    "c5e51755a56ecdc57c3f92d789e3137246c92524d19531d8ad5991026befec3c"
+SELECTED_SPEC_SHA256 = (
+    "d345235be5bc698d78c5893285abd09f2e62a398f781123d1de8da313a01c7de"
 )
-PINNED_SPEC_SHA256 = (
+SELECTED_BOOTSTRAP_SHA256 = (
+    "1666e44acf532f854d4bf74868c9af9f9b362055692189ac858a7c8b52dcd5bb"
+)
+HISTORICAL_REV13_SHA256 = (
     "e5abd6a32801761fdd5c151a4f90fa4c989b545da02d3cd26dfc4765fab8409a"
 )
-PINNED_SPEC_GZIP_SHA256 = (
+_MANIFEST_SHA256 = (
+    "15409ef9e95c93bb3ad67e6199f42a1b202dddaf673aa987d2023cdcc90012a0"
+)
+_CHAIN_SHA256 = (
+    "6974a0bd5f6344f72b728efed0a154109be8769ef4d956a827701d9b222f6018"
+)
+_CHAIN_GZIP_SHA256 = (
+    "f29c63a8469fda082e7ce330ac4fa3f3781369022b4f1caa06d78e384537a79f"
+)
+_SPEC_GZIP_SHA256 = (
+    "11faa8bf14bff2fa03fa2fdad1a01700aa512517e2d477ac8fff6f51777b5f46"
+)
+_REV13_GZIP_SHA256 = (
     "bac83626f5f0e489c267da0d5a0cb8be539265225d52ce8af5c94dff7054f458"
 )
 
@@ -31,7 +51,7 @@ PINNED_SPEC_GZIP_SHA256 = (
 def checked_fixture_bytes(name: str, sha256: str) -> bytes:
     data = (FIXTURE_ROOT / name).read_bytes()
     if hashlib.sha256(data).hexdigest() != sha256:
-        raise AssertionError(f"pinned fixture checksum mismatch: {name}")
+        raise AssertionError(f"selected fixture checksum mismatch: {name}")
     return data
 
 
@@ -46,38 +66,85 @@ def checked_gzip_fixture(
     with gzip.GzipFile(fileobj=io.BytesIO(compressed), mode="rb") as stream:
         data = stream.read(raw_bytes + 1)
     if len(data) != raw_bytes:
-        raise AssertionError(f"pinned fixture byte count mismatch: {name}")
+        raise AssertionError(f"selected fixture byte count mismatch: {name}")
     if hashlib.sha256(data).hexdigest() != raw_sha256:
-        raise AssertionError(f"pinned fixture content mismatch: {name}")
+        raise AssertionError(f"selected fixture content mismatch: {name}")
     return data
 
 
-def pinned_fixture() -> tuple[dict, bytes, bytes]:
-    manifest_bytes = checked_fixture_bytes(
-        "manifest.json",
-        PINNED_MANIFEST_SHA256,
-    )
+def selected_fixture() -> tuple[dict, bytes, bytes, bytes, bytes]:
+    manifest_bytes = checked_fixture_bytes("manifest.json", _MANIFEST_SHA256)
     manifest = strict_json_loads(manifest_bytes)
     if type(manifest) is not dict:
-        raise AssertionError("pinned fixture manifest is not an object")
+        raise AssertionError("selected fixture manifest is not an object")
     chain = checked_gzip_fixture(
         "chain.jsonl.gz",
-        gzip_sha256=PINNED_CHAIN_GZIP_SHA256,
-        raw_sha256=PINNED_CHAIN_SHA256,
-        raw_bytes=104831,
+        gzip_sha256=_CHAIN_GZIP_SHA256,
+        raw_sha256=_CHAIN_SHA256,
+        raw_bytes=196708,
     )
     spec = checked_gzip_fixture(
         "SPEC.md.gz",
-        gzip_sha256=PINNED_SPEC_GZIP_SHA256,
-        raw_sha256=PINNED_SPEC_SHA256,
+        gzip_sha256=_SPEC_GZIP_SHA256,
+        raw_sha256=SELECTED_SPEC_SHA256,
+        raw_bytes=78183,
+    )
+    rev13 = checked_gzip_fixture(
+        "rev-13-SPEC.md.gz",
+        gzip_sha256=_REV13_GZIP_SHA256,
+        raw_sha256=HISTORICAL_REV13_SHA256,
         raw_bytes=65569,
     )
-    return manifest, chain, spec
+    bootstrap = checked_fixture_bytes(
+        "bootstrap.json",
+        SELECTED_BOOTSTRAP_SHA256,
+    )
+    return manifest, chain, spec, rev13, bootstrap
+
+
+def selected_policies(
+    manifest: dict,
+    bootstrap_bytes: bytes,
+) -> tuple[KindFamilyRegistry, StreamTrustPolicy]:
+    bootstrap = strict_json_loads(bootstrap_bytes)
+    if type(bootstrap) is not dict:
+        raise AssertionError("bootstrap profile is not an object")
+    authority = bootstrap["authority"]
+    canonicalization = bootstrap["canonicalization"]
+    frame_profile = bootstrap["frame"]
+    selected = manifest["selected"]
+    if (
+        canonicalization["input"] != "I-JSON exact-integer subset"
+        or canonicalization["floating_point"] != "refused"
+    ):
+        raise AssertionError("bootstrap number profile is not recognized")
+    registry = KindFamilyRegistry(
+        {frame_profile["kind"]: "body"},
+        genesis_hashes={
+            authority["stream_id"]: authority["genesis_frame_hash"]
+        },
+        verified=True,
+        registry_id=f"sha256:{SELECTED_BOOTSTRAP_SHA256}",
+    )
+    trust = StreamTrustPolicy(
+        stream_id=authority["stream_id"],
+        trusted_genesis_hash=authority["genesis_frame_hash"],
+        prior_head=PersistedHead(
+            seq=selected["seq"],
+            frame_hash=selected["frame_hash"],
+        ),
+        number_profile="exact-integer",
+    )
+    return registry, trust
 
 
 __all__ = (
-    "PINNED_AUTHORITY_COMMIT",
-    "PINNED_CHAIN_SHA256",
-    "PINNED_SPEC_SHA256",
-    "pinned_fixture",
+    "HISTORICAL_REV13_SHA256",
+    "SELECTED_AUTHORITY_COMMIT",
+    "SELECTED_BOOTSTRAP_SHA256",
+    "SELECTED_FRAME_HASH",
+    "SELECTED_PAYLOAD_HASH",
+    "SELECTED_SPEC_SHA256",
+    "selected_fixture",
+    "selected_policies",
 )

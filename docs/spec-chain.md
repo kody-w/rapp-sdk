@@ -129,10 +129,16 @@ installed resource to parse and byte-match this canonical source.
 ## Offline authority parity
 
 The source distribution carries a deterministic gzip fixture pinned to the
-authority commit recorded in its manifest. The default `unittest` suite
-checks the compressed and raw hashes, verifies every chain frame, resolves the
-current revision through an injected immutable source, and blocks network
-opening during the proof. No environment variable or mutable URL is needed.
+owner-ratified protected-main rev-14 merge commit recorded in its manifest.
+The default `unittest` suite checks compressed and raw hashes, verifies all 15
+chain frames, applies the content-addressed bootstrap policy and persisted
+rev-14 head, resolves inline rev-14, resolves historical rev-13 through its
+immutable pointer, and blocks network opening during the proof. No
+environment variable or mutable URL is needed.
+
+The general protocol canonicalizer supports the full round-trippable RFC 8785
+binary64 domain. The selected authority policy additionally applies the
+accepted bootstrap's stricter exact-integer profile to authority frames.
 
 The non-discovered `tests/live_authority_refresh.py` utility provides the
 separate optional reproducibility check against the same immutable commit in
