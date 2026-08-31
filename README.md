@@ -93,6 +93,10 @@ RAPP_SDK_SETUPTOOLS_SITE=.setuptools-provider \
   .build-artifacts/rapp_sdk-0.1.0.tar.gz
 ```
 
+Pull requests must pass the `protocol` matrix on Python 3.11 through 3.14
+and the exact `distribution (3.14)` wheel/offline-sdist install gate before
+merge.
+
 The gate derives the backend-only overlay from the pinned distribution's
 `METADATA`, `top_level.txt`, and `RECORD`. Optional removed modules such as
 `pkg_resources` are not assumed, unrelated provider packages are excluded,
