@@ -1,3 +1,4 @@
+include THIRD_PARTY_NOTICES.md LICENSES/Apache-2.0.txt
 include tests/__init__.py tests/authority_fixture.py
 include tests/distribution_install_smoke.py tests/live_authority_refresh.py
 include src/rapp_sdk/schemas/*.json

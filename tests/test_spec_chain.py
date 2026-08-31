@@ -3,23 +3,30 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
+import tracemalloc
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from rapp_sdk import (
-    CacheIntegrityError,
-    ContentAddressedCache,
-    GitHubRawSource,
-    H,
-    HTTPSFetcher,
-    PARTICLE_SPACE,
+    ContentLocator,
+    KindFamilyRegistry,
     SpecChain,
     SpecChainError,
+    SpecResolver,
     SpecResolutionError,
-    WAVE_SPACE,
+    StreamTrustPolicy,
+    build_frame_mapping,
     build_spec_revision_frame,
     canonicalize,
+    read_spec_revision_schema,
+    strict_json_loads,
+)
+from rapp_sdk.protocol import H, PARTICLE_SPACE, WAVE_SPACE
+from rapp_sdk.resolution import (
+    ContentAddressedCache,
+    GitHubRevisionSource,
 )
 from tests.authority_fixture import (
     PINNED_AUTHORITY_COMMIT,
@@ -28,18 +35,15 @@ from tests.authority_fixture import (
     pinned_fixture,
 )
 
-STREAM_ID = (
-    "rappid:@example/spec-chain:"
-    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-)
+RID = "rappid:@example/spec-chain:" + "1" * 64
 REPOSITORY = "https://github.com/example/specification"
 COMMIT = "a" * 40
+UTC0 = "2026-08-30T00:00:00.000Z"
+UTC1 = "2026-08-30T00:00:01.000Z"
 
 
-def as_jsonl(*frames: dict) -> bytes:
-    return b"\n".join(
-        json.dumps(frame, ensure_ascii=False).encode("utf-8") for frame in frames
-    ) + b"\n"
+def jsonl(*frames: dict) -> bytes:
+    return b"".join(canonicalize(frame) + b"\n" for frame in frames)
 
 
 def rehash(frame: dict) -> None:
@@ -58,69 +62,57 @@ def pointer_frame(
     content: bytes = b"# RAPP/1\n",
     commit: str = COMMIT,
     path: str = "SPEC.md",
+    repository: str = REPOSITORY,
+    integer_size: bool = False,
 ) -> dict:
-    from rapp_sdk import build_frame
-
-    return build_frame(
+    size: int | str = len(content) if integer_size else str(len(content))
+    return build_frame_mapping(
         "body.pulse",
-        STREAM_ID,
+        RID,
         0,
-        "2026-08-30T00:00:00.000Z",
+        UTC0,
         {
             "revision": revision,
-            "canonical_repo": REPOSITORY,
+            "canonical_repo": repository,
             "commit": commit,
             "normative_path": path,
             "normative_sha256": hashlib.sha256(content).hexdigest(),
-            "normative_bytes": str(len(content)),
+            "normative_bytes": size,
         },
         None,
     )
 
 
-class MappingSource:
+def policies(first: dict) -> tuple[KindFamilyRegistry, StreamTrustPolicy]:
+    registry = KindFamilyRegistry(
+        {"body.pulse": "body"},
+        genesis_hashes={first["stream_id"]: first["frame_hash"]},
+        verified=True,
+    )
+    trust = StreamTrustPolicy(
+        stream_id=first["stream_id"],
+        trusted_genesis_hash=first["frame_hash"],
+    )
+    return registry, trust
+
+
+def trusted_chain(*frames: dict) -> SpecChain:
+    registry, trust = policies(frames[0])
+    return SpecChain.from_frames(
+        frames,
+        registry=registry,
+        trust_policy=trust,
+    )
+
+
+class MappingRevisionSource:
     def __init__(self, content: bytes):
         self.content = content
-        self.calls: list[tuple[str, str, str, int]] = []
+        self.calls: list[tuple[ContentLocator, int]] = []
 
-    def fetch(
-        self,
-        repository: str,
-        commit: str,
-        path: str,
-        *,
-        max_bytes: int,
-    ) -> bytes:
-        self.calls.append((repository, commit, path, max_bytes))
+    def read(self, locator: ContentLocator, *, max_bytes: int) -> bytes:
+        self.calls.append((locator, max_bytes))
         return self.content
-
-
-class FakeResponse:
-    def __init__(self, data: bytes, final_url: str):
-        self._data = data
-        self._url = final_url
-        self.status = 200
-        self.headers = {"Content-Length": str(len(data))}
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, traceback):
-        return False
-
-    def geturl(self) -> str:
-        return self._url
-
-    def read(self, amount: int) -> bytes:
-        return self._data[:amount]
-
-
-class FakeOpener:
-    def __init__(self, response: FakeResponse):
-        self.response = response
-
-    def open(self, request, timeout):
-        return self.response
 
 
 class SpecChainTests(unittest.TestCase):
@@ -137,205 +129,34 @@ class SpecChainTests(unittest.TestCase):
 
         shutil.rmtree(self.scratch, ignore_errors=True)
 
-    def test_legacy_pointer_resolves_and_caches_offline(self) -> None:
-        content = b"# RAPP/1\n"
-        chain = SpecChain.from_jsonl(as_jsonl(pointer_frame(content=content)))
-        source = MappingSource(content)
+    def test_explicit_resolver_handles_pointer_cache_and_inline_bytes(self) -> None:
+        content = b"# Pointer\n"
+        chain = trusted_chain(pointer_frame(content=content))
+        source = MappingRevisionSource(content)
         cache = ContentAddressedCache(self.scratch / "cache")
-        resolved = chain.materialize("head", source=source, cache=cache)
-        self.assertEqual(resolved, content)
+        resolver = SpecResolver(chain, source=source, cache=cache)
+        self.assertEqual(resolver.read(chain.head), content)
         self.assertEqual(len(source.calls), 1)
-        self.assertEqual(chain.materialize("rev-1", cache=cache, offline=True), content)
-        self.assertEqual(chain.resolve(0).frame_hash, chain.head.frame_hash)
         self.assertEqual(
-            chain.resolve(frame_hash=chain.head.frame_hash).revision,
-            "rev-1",
-        )
-        self.assertEqual(
-            chain.resolve(payload_hash=chain.head.payload_hash).revision,
-            "rev-1",
+            SpecResolver(chain, cache=cache).read(chain.head),
+            content,
         )
 
-    def test_inline_revision_is_preferred_without_fetch(self) -> None:
-        revision = build_spec_revision_frame(
-            revision="rev-1",
-            text="# Inline\n",
-            utc="2026-08-30T00:00:00.000Z",
-            stream_id=STREAM_ID,
-        )
-        chain = SpecChain.from_jsonl(as_jsonl(revision))
-        source = MappingSource(b"wrong")
-        self.assertEqual(chain.materialize(source=source), b"# Inline\n")
-        self.assertEqual(source.calls, [])
-
-    def test_normative_text_pointer_and_cache_mutations_fail(self) -> None:
         inline = build_spec_revision_frame(
             revision="rev-inline",
-            text="trusted",
-            utc="2026-08-30T00:00:00.000Z",
-            stream_id=STREAM_ID,
+            text="# Inline\n",
+            utc=UTC0,
+            stream_id=RID,
         )
-        inline["payload"]["normative"]["text"] = "mutated"
-        rehash(inline)
-        with self.assertRaisesRegex(SpecChainError, "checksum"):
-            SpecChain.from_jsonl(as_jsonl(inline))
-
-        content = b"trusted pointer"
-        chain = SpecChain.from_jsonl(as_jsonl(pointer_frame(content=content)))
-        with self.assertRaisesRegex(SpecResolutionError, "checksum"):
-            chain.materialize(source=MappingSource(b"x" * len(content)))
-
-        cache = ContentAddressedCache(self.scratch / "cache")
-        chain.materialize(source=MappingSource(content), cache=cache)
-        cache.path_for(chain.head.normative_sha256).write_bytes(
-            b"x" * len(content)
-        )
-        with self.assertRaises(CacheIntegrityError):
-            chain.materialize(cache=cache, offline=True)
-
-    def test_uncached_offline_revision_fails(self) -> None:
-        chain = SpecChain.from_jsonl(as_jsonl(pointer_frame()))
-        with self.assertRaisesRegex(SpecResolutionError, "offline"):
-            chain.materialize(offline=True)
-
-    def test_duplicate_key_oversize_branch_and_unsafe_path_fail(self) -> None:
-        with self.assertRaisesRegex(SpecChainError, "duplicate"):
-            SpecChain.from_jsonl(
-                b'{"spec":"rapp/1","spec":"rapp/1"}\n'
-            )
-        encoded = as_jsonl(pointer_frame())
-        with self.assertRaisesRegex(SpecChainError, "exceeds"):
-            SpecChain.from_jsonl(encoded, max_bytes=len(encoded) - 1)
-        for commit, path in (("main", "SPEC.md"), (COMMIT, "../SPEC.md")):
-            with self.subTest(commit=commit, path=path):
-                candidate = pointer_frame(commit=commit, path=path)
-                with self.assertRaises(SpecChainError):
-                    SpecChain.from_jsonl(as_jsonl(candidate))
-
-    def test_revision_label_cannot_address_different_bytes(self) -> None:
-        first = build_spec_revision_frame(
-            revision="rev-1",
-            text="one",
-            utc="2026-08-30T00:00:00.000Z",
-            stream_id=STREAM_ID,
-        )
-        second = build_spec_revision_frame(
-            revision="rev-1",
-            text="two",
-            utc="2026-08-30T00:00:01.000Z",
-            head=first,
-        )
-        with self.assertRaisesRegex(SpecChainError, "different bytes"):
-            SpecChain.from_jsonl(as_jsonl(first, second))
-
-    def test_legacy_same_byte_revision_checkpoints_remain_compatible(self) -> None:
-        content = b"stable"
-        first = pointer_frame(revision="rev-legacy", content=content)
-        second = copy.deepcopy(first)
-        second["seq"] = 1
-        second["utc"] = "2026-08-30T00:00:01.000Z"
-        second["prev"] = first["payload_hash"]
-        second["payload"]["commit"] = "b" * 40
-        rehash(second)
-        chain = SpecChain.from_jsonl(as_jsonl(first, second))
-        self.assertEqual(chain.resolve("rev-legacy").seq, 1)
-        self.assertEqual(chain.resolve(first["frame_hash"]).seq, 0)
-
-    def test_github_url_is_immutable_and_redirect_result_is_rechecked(self) -> None:
-        expected = (
-            "https://raw.githubusercontent.com/example/specification/"
-            f"{COMMIT}/SPEC.md"
-        )
+        inline_chain = trusted_chain(inline)
         self.assertEqual(
-            GitHubRawSource.raw_url(REPOSITORY, COMMIT, "SPEC.md"),
-            expected,
+            SpecResolver(inline_chain).read(inline_chain.head),
+            b"# Inline\n",
         )
-        for final_url in (
-            expected.replace("https:", "http:"),
-            expected.replace("raw.githubusercontent.com", "example.com"),
-        ):
-            with self.subTest(final_url=final_url):
-                fetcher = HTTPSFetcher(
-                    opener=FakeOpener(FakeResponse(b"ok", final_url))
-                )
-                with self.assertRaisesRegex(SpecResolutionError, "allowed HTTPS"):
-                    fetcher.fetch(expected, max_bytes=2)
 
-    def test_self_contained_frame_stays_within_protocol_limit(self) -> None:
-        built = build_spec_revision_frame(
-            revision="rev-2",
-            text="hello",
-            utc="2026-08-30T00:00:00.000Z",
-            stream_id=STREAM_ID,
-        )
-        self.assertLessEqual(len(canonicalize(built)), 1024 * 1024)
-
-    def test_builder_refuses_a_corrupt_or_regressing_head(self) -> None:
-        head = build_spec_revision_frame(
-            revision="rev-1",
-            text="one",
-            utc="2026-08-30T00:00:01.000Z",
-            stream_id=STREAM_ID,
-        )
-        corrupt = copy.deepcopy(head)
-        corrupt["payload_hash"] = "0" * 64
-        with self.assertRaisesRegex(SpecChainError, "payload_hash"):
-            build_spec_revision_frame(
-                revision="rev-2",
-                text="two",
-                utc="2026-08-30T00:00:02.000Z",
-                head=corrupt,
-            )
-        with self.assertRaisesRegex(SpecChainError, "earlier"):
-            build_spec_revision_frame(
-                revision="rev-2",
-                text="two",
-                utc="2026-08-30T00:00:00.000Z",
-                head=head,
-            )
-
-
-class PinnedFixtureSource:
-    def __init__(self, content: bytes):
-        self.content = content
-        self.calls: list[tuple[str, str, str, int]] = []
-
-    def fetch(
-        self,
-        repository: str,
-        commit: str,
-        path: str,
-        *,
-        max_bytes: int,
-    ) -> bytes:
-        self.calls.append((repository, commit, path, max_bytes))
-        if repository != "https://github.com/kody-w/rapp-1":
-            raise AssertionError("fixture source received the wrong repository")
-        if commit != "5e30f66396f4cd125bce5718b1fef92d8d3ddab8":
-            raise AssertionError("fixture source received a mutable or wrong commit")
-        if path != "SPEC.md" or max_bytes != 65569:
-            raise AssertionError("fixture source received the wrong path or byte cap")
-        return self.content
-
-
-class PinnedAuthorityCompatibilityTests(unittest.TestCase):
-    def test_all_frames_and_current_normative_bytes_offline(self) -> None:
-        manifest, chain_bytes, spec_bytes = pinned_fixture()
-        self.assertEqual(
-            manifest["schema"],
-            "rapp-sdk-authority-fixture/1",
-        )
-        self.assertEqual(
-            manifest["authority_commit"],
-            PINNED_AUTHORITY_COMMIT,
-        )
-        self.assertEqual(manifest["chain"]["frames"], 14)
-        self.assertEqual(manifest["chain"]["bytes"], len(chain_bytes))
-        self.assertEqual(manifest["chain"]["sha256"], PINNED_CHAIN_SHA256)
-        self.assertEqual(manifest["normative"]["bytes"], len(spec_bytes))
-        self.assertEqual(manifest["normative"]["sha256"], PINNED_SPEC_SHA256)
-
-        source = PinnedFixtureSource(spec_bytes)
+    def test_no_source_never_opens_network_and_local_chain_cannot_resolve(self) -> None:
+        pointer = pointer_frame()
+        chain = trusted_chain(pointer)
         with mock.patch(
             "urllib.request.OpenerDirector.open",
             side_effect=AssertionError("network access is forbidden"),
@@ -343,65 +164,286 @@ class PinnedAuthorityCompatibilityTests(unittest.TestCase):
             "socket.create_connection",
             side_effect=AssertionError("network access is forbidden"),
         ):
-            chain = SpecChain.from_jsonl(chain_bytes)
-            resolved = chain.materialize("head", source=source)
+            with self.assertRaises(SpecResolutionError) as raised:
+                SpecResolver(chain).read(chain.head)
+        self.assertEqual(raised.exception.code, "source-required")
+        self.assertIn(
+            "explicit source",
+            raised.exception.diagnostic.remediation,
+        )
 
-        self.assertEqual(len(chain), 14)
-        self.assertEqual([revision.seq for revision in chain], list(range(14)))
-        actual_frames = [
+        registry, _ = policies(pointer)
+        local = SpecChain.from_frames_local([pointer], registry=registry)
+        self.assertFalse(local.trusted)
+        with self.assertRaises(SpecResolutionError) as untrusted:
+            SpecResolver(local).read(local.head)
+        self.assertEqual(untrusted.exception.code, "untrusted-chain")
+
+    def test_selector_api_is_keyword_only_and_labels_are_explicit(self) -> None:
+        content = b"stable"
+        first = pointer_frame(revision="rev-legacy", content=content)
+        first_chain = trusted_chain(first)
+        second = build_frame_mapping(
+            "body.pulse",
+            RID,
+            1,
+            UTC1,
             {
-                "seq": revision.seq,
-                "revision": revision.revision,
-                "frame_hash": revision.frame_hash,
-                "payload_hash": revision.payload_hash,
-                "normative_sha256": revision.normative_sha256,
-                "normative_bytes": revision.normative_bytes,
-            }
-            for revision in chain
+                **first["payload"],
+                "commit": "b" * 40,
+            },
+            first["payload_hash"],
+        )
+        chain = trusted_chain(first, second)
+        self.assertEqual(chain.head.seq, 1)
+        self.assertEqual(chain.resolve(revision="rev-legacy").seq, 1)
+        self.assertEqual(chain.resolve(seq=0).frame_hash, first_chain.head.frame_hash)
+        self.assertEqual(
+            chain.resolve(frame_hash=first["frame_hash"]).seq,
+            0,
+        )
+        self.assertEqual(
+            chain.resolve(payload_hash=second["payload_hash"]).seq,
+            1,
+        )
+        with self.assertRaises(TypeError):
+            chain.resolve("rev-legacy")
+        with self.assertRaises(ValueError):
+            chain.resolve()
+        with self.assertRaises(ValueError):
+            chain.resolve(revision="rev-legacy", seq=1)
+
+    def test_schema_and_runtime_profiles_match(self) -> None:
+        schema = json.loads(read_spec_revision_schema())
+        inline_bytes_schema = schema["properties"]["normative"]["properties"][
+            "bytes"
         ]
-        self.assertEqual(actual_frames, manifest["frames"])
-        for expected in manifest["frames"]:
-            revision = chain.resolve(expected["seq"])
-            self.assertEqual(
-                chain.resolve(revision.frame_hash).address,
-                revision.address,
-            )
-            self.assertEqual(
-                chain.resolve(revision.payload_hash).address,
-                revision.address,
+        self.assertEqual(inline_bytes_schema["type"], "integer")
+        self.assertEqual(
+            schema["properties"]["normative_path"]["maxLength"],
+            1024,
+        )
+        path_pattern = re.compile(
+            schema["properties"]["normative_path"]["pattern"]
+        )
+        repository_pattern = re.compile(
+            schema["properties"]["canonical_repo"]["pattern"]
+        )
+        legacy_types = schema["properties"]["normative_bytes"]["oneOf"]
+        self.assertEqual(
+            {entry["type"] for entry in legacy_types},
+            {"integer", "string"},
+        )
+        string_size_schema = next(
+            entry for entry in legacy_types if entry["type"] == "string"
+        )
+        self.assertEqual(string_size_schema["x-rapp-maximum"], 1048576)
+
+        for integer_size in (False, True):
+            with self.subTest(integer_size=integer_size):
+                self.assertEqual(
+                    trusted_chain(
+                        pointer_frame(integer_size=integer_size)
+                    ).head.normative_bytes,
+                    9,
+                )
+
+        invalid_inline = build_spec_revision_frame(
+            revision="rev-1",
+            text="text",
+            utc=UTC0,
+            stream_id=RID,
+        )
+        invalid_inline["payload"]["normative"]["bytes"] = "4"
+        rehash(invalid_inline)
+        with self.assertRaises(SpecChainError) as inline_error:
+            trusted_chain(invalid_inline)
+        self.assertEqual(inline_error.exception.code, "invalid-inline-size")
+
+        with self.assertRaises(SpecChainError) as long_path:
+            trusted_chain(pointer_frame(path="a" * 1025))
+        self.assertEqual(long_path.exception.code, "unsafe-path")
+        oversized_pointer = pointer_frame()
+        oversized_pointer["payload"]["normative_bytes"] = "1048577"
+        rehash(oversized_pointer)
+        with self.assertRaises(SpecChainError) as oversized:
+            trusted_chain(oversized_pointer)
+        self.assertEqual(oversized.exception.code, "spec-size-exceeded")
+        for unsafe in ("a//b", "a/../b", "a/", "a b"):
+            with self.subTest(unsafe=unsafe):
+                self.assertIsNone(path_pattern.fullmatch(unsafe))
+                with self.assertRaises(SpecChainError):
+                    trusted_chain(pointer_frame(path=unsafe))
+        self.assertIsNotNone(path_pattern.fullmatch("specs/RAPP-1.md"))
+        self.assertIsNotNone(
+            repository_pattern.fullmatch("https://example.com/specification")
+        )
+        self.assertIsNone(
+            repository_pattern.fullmatch("HTTPS://example.com/specification")
+        )
+        with self.assertRaises(SpecChainError):
+            trusted_chain(
+                pointer_frame(
+                    repository="HTTPS://example.com/specification"
+                )
             )
 
+    def test_jsonl_scanning_is_deadline_and_memory_bounded(self) -> None:
+        first = pointer_frame()
+        registry, _ = policies(first)
+        with self.assertRaises(SpecChainError) as timed:
+            SpecChain.from_jsonl_local(
+                jsonl(first),
+                registry=registry,
+                max_seconds=0,
+            )
+        self.assertEqual(
+            timed.exception.code,
+            "verification-time-exceeded",
+        )
+        with self.assertRaises(SpecChainError) as capped:
+            SpecChain.from_jsonl_local(
+                jsonl(first) + b"not-json\n",
+                registry=registry,
+                max_frames=1,
+            )
+        self.assertEqual(capped.exception.code, "frame-count-exceeded")
+
+        adversarial = b"\n" * 2_000_000
+        tracemalloc.start()
+        try:
+            with self.assertRaises(SpecChainError) as blank:
+                SpecChain.from_jsonl_local(
+                    adversarial,
+                    registry=registry,
+                )
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        self.assertEqual(blank.exception.code, "blank-chain-line")
+        self.assertLess(peak, 4 * 1024 * 1024)
+
+    def test_normative_and_cache_mutations_fail(self) -> None:
+        inline = build_spec_revision_frame(
+            revision="rev-inline",
+            text="trusted",
+            utc=UTC0,
+            stream_id=RID,
+        )
+        inline["payload"]["normative"]["text"] = "mutated"
+        rehash(inline)
+        with self.assertRaises(SpecChainError) as text_error:
+            trusted_chain(inline)
+        self.assertEqual(text_error.exception.code, "inline-hash-mismatch")
+
+        content = b"trusted pointer"
+        chain = trusted_chain(pointer_frame(content=content))
+        with self.assertRaises(SpecResolutionError) as pointer_error:
+            SpecResolver(
+                chain,
+                source=MappingRevisionSource(b"x" * len(content)),
+            ).read(chain.head)
+        self.assertEqual(pointer_error.exception.code, "normative-hash-mismatch")
+
+        cache = ContentAddressedCache(self.scratch / "cache")
+        SpecResolver(
+            chain,
+            source=MappingRevisionSource(content),
+            cache=cache,
+        ).read(chain.head)
+        cache.path_for(chain.head.normative_sha256).write_bytes(
+            b"x" * len(content)
+        )
+        with self.assertRaises(SpecResolutionError) as cache_error:
+            SpecResolver(chain, cache=cache).read(chain.head)
+        self.assertEqual(cache_error.exception.code, "cached-hash-mismatch")
+
+    def test_github_interpretation_is_isolated_in_source_adapter(self) -> None:
+        chain = trusted_chain(pointer_frame())
+        locator = chain.head.locator
+        self.assertIsNotNone(locator)
+        self.assertEqual(
+            GitHubRevisionSource.raw_url(locator),
+            "https://raw.githubusercontent.com/example/specification/"
+            f"{COMMIT}/SPEC.md",
+        )
+        generic = trusted_chain(
+            pointer_frame(repository="https://example.com/specification")
+        )
+        self.assertEqual(
+            generic.head.locator.attributes["repository"],
+            "https://example.com/specification",
+        )
+        with self.assertRaises(SpecResolutionError) as unsupported:
+            GitHubRevisionSource.raw_url(generic.head.locator)
+        self.assertEqual(unsupported.exception.code, "invalid-repository")
+        unsafe = ContentLocator(
+            scheme="rapp-legacy-repository-v1",
+            attributes={
+                "repository": REPOSITORY,
+                "commit": COMMIT,
+                "path": "../SPEC.md",
+            },
+        )
+        with self.assertRaises(SpecResolutionError) as traversal:
+            GitHubRevisionSource.raw_url(unsafe)
+        self.assertEqual(traversal.exception.code, "unsafe-path")
+
+
+class PinnedAuthorityCompatibilityTests(unittest.TestCase):
+    def test_all_frames_and_current_normative_bytes_offline(self) -> None:
+        manifest, chain_bytes, spec_bytes = pinned_fixture()
+        first = strict_json_loads(chain_bytes.split(b"\n", 1)[0])
+        self.assertIsInstance(first, dict)
+        registry = KindFamilyRegistry(
+            {"body.pulse": "body"},
+            genesis_hashes={first["stream_id"]: first["frame_hash"]},
+            verified=True,
+            registry_id=f"rapp-1@{PINNED_AUTHORITY_COMMIT}",
+        )
+        trust = StreamTrustPolicy(
+            stream_id=first["stream_id"],
+            trusted_genesis_hash=first["frame_hash"],
+        )
+        source = MappingRevisionSource(spec_bytes)
+        with mock.patch(
+            "urllib.request.OpenerDirector.open",
+            side_effect=AssertionError("network access is forbidden"),
+        ), mock.patch(
+            "socket.create_connection",
+            side_effect=AssertionError("network access is forbidden"),
+        ):
+            chain = SpecChain.from_jsonl(
+                chain_bytes,
+                registry=registry,
+                trust_policy=trust,
+            )
+            resolved = SpecResolver(chain, source=source).read(chain.head)
+
+        self.assertTrue(chain.trusted)
+        self.assertEqual(len(chain), 14)
+        self.assertEqual([item.seq for item in chain], list(range(14)))
+        self.assertEqual(
+            hashlib.sha256(chain_bytes).hexdigest(),
+            PINNED_CHAIN_SHA256,
+        )
+        actual = [
+            {
+                "seq": item.seq,
+                "revision": item.revision,
+                "frame_hash": item.frame_hash,
+                "payload_hash": item.payload_hash,
+                "normative_sha256": item.normative_sha256,
+                "normative_bytes": item.normative_bytes,
+            }
+            for item in chain
+        ]
+        self.assertEqual(actual, manifest["frames"])
         self.assertEqual(chain.head.revision, "rev-13")
-        self.assertEqual(chain.head.seq, 13)
-        self.assertEqual(
-            chain.head.frame_hash,
-            "bbcee75ebbbf82d11d8ffd666fdda34c8233642de6d6e4f45910d43a24a001e3",
-        )
-        self.assertEqual(
-            chain.head.payload_hash,
-            "78a89c06509b5100494b9c7e0f551acdc6209fd90aded734321f3580b0f07051",
-        )
-        self.assertEqual(
-            chain.head.global_url,
-            "https://raw.githubusercontent.com/kody-w/rapp-1/"
-            "5e30f66396f4cd125bce5718b1fef92d8d3ddab8/SPEC.md",
-        )
-        self.assertEqual(len(resolved), 65569)
+        self.assertEqual(chain.head.normative_bytes, 65569)
+        self.assertEqual(chain.head.normative_sha256, PINNED_SPEC_SHA256)
         self.assertEqual(resolved, spec_bytes)
         self.assertEqual(hashlib.sha256(resolved).hexdigest(), PINNED_SPEC_SHA256)
-        self.assertEqual(
-            source.calls,
-            [
-                (
-                    "https://github.com/kody-w/rapp-1",
-                    "5e30f66396f4cd125bce5718b1fef92d8d3ddab8",
-                    "SPEC.md",
-                    65569,
-                )
-            ],
-        )
-        reloaded = SpecChain.from_jsonl(chain.to_jsonl_bytes())
-        self.assertEqual(reloaded.head.address, chain.head.address)
 
 
 if __name__ == "__main__":

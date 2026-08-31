@@ -29,30 +29,75 @@ competing children at one sequence are a refused fork, not a merge request.
 
 `SpecChain` is the verified index. Create one with:
 
-- `SpecChain.from_frames(iterable)` for decoded mappings;
-- `SpecChain.from_jsonl(bytes)` for an explicit UTF-8 byte boundary;
-- `SpecChain.from_jsonl_text(str)` for an explicit text boundary; or
-- `SpecChain.load(str | os.PathLike[str])` for a filesystem path.
+- `SpecChain.from_frames(..., registry=..., trust_policy=...)`;
+- `SpecChain.from_jsonl(..., registry=..., trust_policy=...)`;
+- `SpecChain.from_jsonl_text(..., registry=..., trust_policy=...)`; or
+- `SpecChain.load(..., registry=..., trust_policy=...)`.
 
 The chain is sequence-like and exposes immutable `SpecRevision` values.
 `SpecRevision.address` is an immutable `RevisionAddress`. `to_dict()` returns a
-fresh mutable wire dictionary, while `to_json_bytes()`, `frame_bytes`, and
+fresh mutable wire dictionary, while `to_json_bytes()` and
 `SpecChain.to_jsonl_bytes()` are deterministic canonical byte serializations.
-`materialize()` always returns verified bytes; decode only after checking the
-revision's `media_type`.
 
-Expected refusals derive from `RappSDKError`. Each has a stable `code`, an
-operation or protocol `step`, immutable scalar `context`, deterministic
-`repr`, and `as_dict()` for logging:
+`from_frames_local()` and `from_jsonl_local()` are the only APIs that accept
+internal consistency without an external trust root. Their result is labeled
+`local-untrusted` and `SpecResolver` refuses to use it as authority.
+
+Resolution is deliberately separate and has no default network source:
 
 ```python
-from rapp_sdk import RappSDKError, SpecChain
+from rapp_sdk import SpecResolver
+from rapp_sdk.resolution import GitHubRevisionSource
+
+# Inline or cached bytes need no source.
+spec_bytes = SpecResolver(chain).read(chain.head)
+
+# A legacy uncached pointer needs an explicit adapter.
+resolver = SpecResolver(chain, source=GitHubRevisionSource())
+spec_bytes = resolver.read(chain.resolve(seq=13))
+```
+
+Selectors are keyword-only. Use `chain.head` for the head, or exactly one of
+`revision=`, `seq=`, `frame_hash=`, and `payload_hash=` with `resolve()`.
+There is no positional type/hash guessing.
+
+`check_frame()` and `check_stream()` return one generic
+`VerificationReport[T]`. `verify_frame()` and `verify_stream()` are raising
+wrappers over `report.require()`. Every exception carries the same immutable
+`Diagnostic`, separating code, operation, protocol step, location, context,
+and remediation:
+
+```python
+from rapp_sdk import RappSDKError, check_stream
 
 try:
-    chain = SpecChain.from_jsonl(untrusted_bytes)
+    stream = check_stream(
+        frames,
+        registry=registry,
+        trust_policy=trust_policy,
+    ).require()
 except RappSDKError as error:
-    diagnostic = error.as_dict()
+    diagnostic = error.diagnostic.as_dict()
 ```
+
+The stable code catalog is
+`rapp_sdk.diagnostic_codes.DIAGNOSTIC_CODES`.
+
+### Preview API migration
+
+- `build_frame(...)` → `build_frame_mapping(...)` (`build_frame` remains an
+  advanced submodule alias).
+- `verify_frame()` now requires a verified `KindFamilyRegistry` and returns
+  `VerifiedFrame`.
+- `verify_stream()` additionally requires `StreamTrustPolicy` and returns
+  `VerifiedStream`.
+- `SpecChain.from_*()` requires registry/trust; use the explicitly named
+  `*_local()` constructors only for non-authoritative inspection.
+- `chain.materialize(...)` → `SpecResolver(chain, source=..., cache=...).read(...)`.
+- `chain.resolve("rev-13")` → `chain.resolve(revision="rev-13")`; use
+  `chain.head` directly for the head.
+- Hash spaces, `H`/`Hb`, limits, local verification, transports, and cache
+  types moved from the root namespace to their advanced submodules.
 
 Importing the package is inert: it performs no filesystem access, network
 access, environment reads, logging, or package-metadata discovery.
@@ -95,7 +140,7 @@ a local authority checkout.
 
 ## Legacy pointer revisions
 
-Existing authority frames point to immutable GitHub objects with:
+Existing authority frames carry source-neutral legacy locator fields:
 
 - `canonical_repo`
 - `commit`
@@ -103,17 +148,18 @@ Existing authority frames point to immutable GitHub objects with:
 - `normative_sha256`
 - `normative_bytes`
 
-The commit must be exactly 40 lowercase hexadecimal characters. Paths must be
-safe relative POSIX paths. For a repository
-`https://github.com/OWNER/REPOSITORY`, the globally resolvable immutable object
-URL is:
+The chain validates HTTPS, the immutable 40-hex commit, safe bounded POSIX
+paths, size, and checksum without selecting a repository vendor.
+`GitHubRevisionSource` alone interprets a compatible locator as:
 
 ```text
 https://raw.githubusercontent.com/OWNER/REPOSITORY/COMMIT/PATH
 ```
 
-The SDK allows HTTPS only, validates redirects and final hosts, applies byte
-ceilings, and verifies both the declared byte count and SHA-256 digest.
+That adapter allows HTTPS only, validates redirects and final hosts, and
+applies byte ceilings. Other synchronous or future asynchronous source
+adapters can consume the same immutable `ContentLocator` without changing
+`SpecChain` or `SpecRevision`.
 
 ## Inline revisions
 
@@ -135,25 +181,26 @@ Inline bytes are preferred and verified before use. A frame may retain the
 legacy pointer fields as redundant global resolution metadata, but their
 digest and size must agree with the inline object.
 
-## Cache and offline behavior
+## Cache and network behavior
 
 `ContentAddressedCache` stores objects by raw SHA-256. Every read revalidates
 size and checksum. Writes use a same-directory temporary file, file `fsync`,
 atomic rename, and directory `fsync` where supported. A corrupt object is
-refused rather than silently repaired. Offline resolution succeeds only for
-verified inline or cached bytes.
+refused rather than silently repaired.
 
 ```python
-from rapp_sdk import ContentAddressedCache, SpecChain
+from rapp_sdk import SpecResolver
+from rapp_sdk.resolution import ContentAddressedCache, GitHubRevisionSource
 
-chain = SpecChain.load("anchor/chain.jsonl")
-revision = chain.resolve("head")
-spec_bytes = chain.materialize(
-    frame_hash=revision.frame_hash,
+resolver = SpecResolver(
+    chain,
     cache=ContentAddressedCache(".cache/rapp-sdk"),
+    source=GitHubRevisionSource(),
 )
+spec_bytes = resolver.read(chain.head)
 ```
 
-Mutable URLs such as an anchor chain on a default branch can announce new
-frames. They do not replace verification of the chain and the immutable
-addresses embedded in each frame.
+If an uncached legacy revision has no source, resolution fails with
+`source-required`; no network transport is constructed or opened. Mutable
+URLs can announce new frames, but never replace verified chain and trust
+policy.

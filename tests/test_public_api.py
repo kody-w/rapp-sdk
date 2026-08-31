@@ -17,22 +17,34 @@ from types import MappingProxyType
 from typing import get_type_hints
 
 import rapp_sdk
+from rapp_sdk.diagnostic_codes import (
+    DIAGNOSTIC_CATALOG_VERSION,
+    DIAGNOSTIC_CODES,
+)
 from rapp_sdk import (
     CacheIntegrityError,
-    ContentAddressedCache,
-    HTTPSFetcher,
+    ContentLocator,
+    Diagnostic,
+    KindFamilyRegistry,
+    PersistedHead,
     ProtocolError,
     RappSDKError,
     RevisionAddress,
     SPEC_REVISION_SCHEMA_ID,
-    SPEC_REVISION_SCHEMA_RESOURCE,
     SpecChain,
     SpecChainError,
+    SpecResolver,
     SpecResolutionError,
     SpecRevision,
-    build_frame,
+    StreamTrustPolicy,
+    VerificationReport,
+    VerifiedFrame,
+    VerifiedStream,
+    build_frame_mapping,
     build_spec_revision_frame,
     canonicalize,
+    check_frame,
+    check_stream,
     read_spec_revision_schema,
     strict_json_loads,
     verify_frame,
@@ -40,57 +52,134 @@ from rapp_sdk import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-STREAM_ID = "rappid:@example/public-api:" + "0" * 64
+RID = "rappid:@example/public-api:" + "0" * 64
+ROOT_EXPORTS = (
+    "CacheIntegrityError",
+    "ContentLocator",
+    "Diagnostic",
+    "DiagnosticStatus",
+    "KindFamilyRegistry",
+    "PROTOCOL_VERSION",
+    "PersistedHead",
+    "ProtocolError",
+    "RappSDKError",
+    "RevisionAddress",
+    "RevisionSource",
+    "SPEC_REVISION_SCHEMA_ID",
+    "SpecChain",
+    "SpecChainError",
+    "SpecResolver",
+    "SpecResolutionError",
+    "SpecRevision",
+    "StreamTrustPolicy",
+    "VERSION",
+    "VerificationReport",
+    "VerifiedFrame",
+    "VerifiedStream",
+    "__version__",
+    "__version_info__",
+    "build_frame_mapping",
+    "build_spec_revision_frame",
+    "canonicalize",
+    "check_frame",
+    "check_stream",
+    "read_spec_revision_schema",
+    "strict_json_loads",
+    "verify_frame",
+    "verify_stream",
+)
 
 
-def inline_chain() -> SpecChain:
+def inline_chain() -> tuple[SpecChain, KindFamilyRegistry, StreamTrustPolicy]:
     first = build_spec_revision_frame(
         revision="rev-1",
         text="one",
         utc="2026-08-30T00:00:00.000Z",
-        stream_id=STREAM_ID,
+        stream_id=RID,
+    )
+    registry = KindFamilyRegistry(
+        {"body.pulse": "body"},
+        genesis_hashes={RID: first["frame_hash"]},
+        verified=True,
+    )
+    trust = StreamTrustPolicy(
+        stream_id=RID,
+        trusted_genesis_hash=first["frame_hash"],
+    )
+    first_chain = SpecChain.from_frames(
+        [first],
+        registry=registry,
+        trust_policy=trust,
     )
     second = build_spec_revision_frame(
         revision="rev-2",
         text="two",
         utc="2026-08-30T00:00:01.000Z",
-        head=first,
+        head=first_chain.head.frame,
     )
-    return SpecChain.from_frames([first, second])
+    return (
+        SpecChain.from_frames(
+            [first, second],
+            registry=registry,
+            trust_policy=trust,
+        ),
+        registry,
+        trust,
+    )
 
 
 class PublicAPITests(unittest.TestCase):
-    def test_export_surface_and_version_are_stable(self) -> None:
-        self.assertIsInstance(rapp_sdk.__all__, tuple)
-        self.assertEqual(len(rapp_sdk.__all__), len(set(rapp_sdk.__all__)))
-        for name in rapp_sdk.__all__:
+    def test_root_exports_and_versions_are_literal_snapshots(self) -> None:
+        self.assertEqual(rapp_sdk.__all__, ROOT_EXPORTS)
+        self.assertEqual(len(ROOT_EXPORTS), len(set(ROOT_EXPORTS)))
+        for name in ROOT_EXPORTS:
             self.assertTrue(hasattr(rapp_sdk, name), name)
+        for advanced in (
+            "FRAME_KEYS",
+            "H",
+            "Hb",
+            "HTTPSFetcher",
+            "ContentAddressedCache",
+            "MAX_CHAIN_BYTES",
+            "PARTICLE_SPACE",
+        ):
+            self.assertNotIn(advanced, rapp_sdk.__all__)
+
         metadata = tomllib.loads((ROOT / "pyproject.toml").read_text())
         self.assertEqual(rapp_sdk.__version__, metadata["project"]["version"])
         self.assertEqual(rapp_sdk.VERSION, rapp_sdk.__version_info__)
         self.assertEqual(rapp_sdk.__version_info__, (0, 1, 0))
+        self.assertEqual(rapp_sdk.PROTOCOL_VERSION, "rapp/1")
         self.assertTrue(files("rapp_sdk").joinpath("py.typed").is_file())
-        self.assertTrue(issubclass(ProtocolError, RappSDKError))
-        self.assertTrue(issubclass(SpecChainError, RappSDKError))
-        self.assertFalse(issubclass(SpecChainError, ProtocolError))
-        self.assertTrue(issubclass(SpecResolutionError, SpecChainError))
-        self.assertTrue(issubclass(CacheIntegrityError, SpecResolutionError))
 
-    def test_public_callables_have_parameter_and_return_annotations(self) -> None:
+    def test_diagnostic_code_catalog_is_stable(self) -> None:
+        self.assertEqual(DIAGNOSTIC_CATALOG_VERSION, "1")
+        self.assertEqual(len(DIAGNOSTIC_CODES), 99)
+        self.assertEqual(DIAGNOSTIC_CODES, tuple(sorted(DIAGNOSTIC_CODES)))
+        self.assertEqual(
+            hashlib.sha256(
+                ("\n".join(DIAGNOSTIC_CODES) + "\n").encode()
+            ).hexdigest(),
+            "959f62aea1d40461be0dfe6e4e9f50e36c37194f5861ab929c3b6a8a507171a4",
+        )
+
+    def test_golden_callables_are_fully_annotated(self) -> None:
         callables = (
             canonicalize,
             strict_json_loads,
-            build_frame,
+            build_frame_mapping,
+            check_frame,
             verify_frame,
+            check_stream,
             verify_stream,
             build_spec_revision_frame,
             read_spec_revision_schema,
             SpecChain.from_frames,
+            SpecChain.from_frames_local,
             SpecChain.from_jsonl,
-            SpecChain.from_jsonl_text,
-            SpecChain.load,
+            SpecChain.from_jsonl_local,
             SpecChain.resolve,
-            SpecChain.materialize,
+            SpecResolver.read,
         )
         for function in callables:
             with self.subTest(function=function.__qualname__):
@@ -109,105 +198,205 @@ class PublicAPITests(unittest.TestCase):
                     )
                 self.assertTrue(get_type_hints(function))
 
-    def test_schema_is_a_canonical_package_resource(self) -> None:
+    def test_golden_signatures_and_defaults_are_stable(self) -> None:
+        snapshots = {
+            KindFamilyRegistry: (
+                "(kind_families: 'Mapping[str, str]', "
+                "genesis_hashes: 'Mapping[str, str]' = <factory>, "
+                "verified: 'bool' = False, "
+                "registry_id: 'str | None' = None) -> None"
+            ),
+            StreamTrustPolicy: (
+                "(stream_id: 'str', trusted_genesis_hash: 'str', "
+                "prior_head: 'PersistedHead | None' = None, "
+                "approved_re_genesis_hashes: 'frozenset[str]' = "
+                "frozenset()) -> None"
+            ),
+            build_frame_mapping: (
+                "(kind: 'str', stream_id: 'str', seq: 'int', utc: 'str', "
+                "payload: 'Mapping[str, JsonValue]', prev: 'str | None', *, "
+                "prev_wave: 'str | None' = None, sig: 'str | None' = None) "
+                "-> 'Frame'"
+            ),
+            check_frame: (
+                "(frame: 'FrameMapping', *, registry: 'KindFamilyRegistry', "
+                "head: 'VerifiedFrame | None' = None, "
+                "expected_stream_id: 'str | None' = None, "
+                "signature_verifier: 'SignatureVerifier | None' = None) -> "
+                "'VerificationReport[VerifiedFrame]'"
+            ),
+            check_stream: (
+                "(frames: 'Iterable[FrameMapping]', *, "
+                "registry: 'KindFamilyRegistry', "
+                "trust_policy: 'StreamTrustPolicy', "
+                "expected_stream_id: 'str | None' = None, "
+                "signature_verifier: 'SignatureVerifier | None' = None, "
+                "max_frames: 'int' = 100000, max_seconds: 'float' = 5.0) -> "
+                "'VerificationReport[VerifiedStream]'"
+            ),
+            SpecChain.from_frames: (
+                "(frames: 'Iterable[FrameMapping]', *, "
+                "registry: 'KindFamilyRegistry', "
+                "trust_policy: 'StreamTrustPolicy', "
+                "expected_stream_id: 'str | None' = None, "
+                "max_frames: 'int' = 100000, max_seconds: 'float' = 5.0) -> "
+                "'SpecChain'"
+            ),
+            SpecChain.resolve: (
+                "(self, *, revision: 'str | None' = None, "
+                "seq: 'int | None' = None, "
+                "frame_hash: 'str | None' = None, "
+                "payload_hash: 'str | None' = None) -> 'SpecRevision'"
+            ),
+            SpecResolver: (
+                "(chain: 'SpecChain', *, source: 'RevisionSource | None' = "
+                "None, cache: 'ContentAddressedCache | None' = None) -> 'None'"
+            ),
+            SpecResolver.read: "(self, revision: 'SpecRevision') -> 'bytes'",
+        }
+        for function, expected in snapshots.items():
+            with self.subTest(function=function.__qualname__):
+                self.assertEqual(str(inspect.signature(function)), expected)
+
+    def test_immutable_model_fields_are_stable(self) -> None:
+        snapshots = {
+            Diagnostic: (
+                "code",
+                "operation",
+                "message",
+                "status",
+                "protocol_step",
+                "location",
+                "context",
+                "remediation",
+            ),
+            KindFamilyRegistry: (
+                "kind_families",
+                "genesis_hashes",
+                "verified",
+                "registry_id",
+            ),
+            PersistedHead: ("seq", "frame_hash"),
+            StreamTrustPolicy: (
+                "stream_id",
+                "trusted_genesis_hash",
+                "prior_head",
+                "approved_re_genesis_hashes",
+            ),
+            VerifiedFrame: (
+                "spec",
+                "kind",
+                "stream_id",
+                "family",
+                "seq",
+                "utc",
+                "payload",
+                "payload_hash",
+                "frame_hash",
+                "prev",
+                "prev_wave",
+                "sig",
+                "_canonical_bytes",
+            ),
+            VerifiedStream: (
+                "frames",
+                "trusted",
+                "trust_label",
+                "genesis_hash",
+            ),
+            RevisionAddress: (
+                "revision",
+                "seq",
+                "frame_hash",
+                "payload_hash",
+            ),
+            ContentLocator: ("scheme", "attributes"),
+            SpecRevision: (
+                "address",
+                "stream_id",
+                "normative_sha256",
+                "normative_bytes",
+                "media_type",
+                "locator",
+                "is_inline",
+                "frame",
+                "_inline_bytes",
+            ),
+        }
+        for model, expected in snapshots.items():
+            with self.subTest(model=model.__name__):
+                self.assertEqual(
+                    tuple(field.name for field in dataclasses.fields(model)),
+                    expected,
+                )
+                self.assertTrue(model.__dataclass_params__.frozen)
+                self.assertTrue(hasattr(model, "__slots__"))
+
+    def test_schema_is_canonical_package_resource(self) -> None:
         resource = files("rapp_sdk").joinpath(
-            f"schemas/{SPEC_REVISION_SCHEMA_RESOURCE}"
+            "schemas/rapp-spec-revision-v1.schema.json"
         )
         self.assertTrue(resource.is_file())
         source_bytes = resource.read_bytes()
         self.assertEqual(read_spec_revision_schema(), source_bytes)
         self.assertEqual(
             hashlib.sha256(source_bytes).hexdigest(),
-            "c3114ccb0b3e57b7c5ea07e0392df433534fe17114010ba5869130ea51e8eb5a",
+            "939283dc97c0f0da5201b557314d6da35ac0805ec62f946877eb1a0d36080f24",
         )
-        schema = json.loads(source_bytes)
-        self.assertEqual(schema["$id"], SPEC_REVISION_SCHEMA_ID)
-        self.assertEqual(SPEC_REVISION_SCHEMA_ID, "urn:rapp:schema:spec-revision:1")
+        self.assertEqual(
+            json.loads(source_bytes)["$id"],
+            SPEC_REVISION_SCHEMA_ID,
+        )
 
-    def test_error_diagnostics_are_actionable_and_immutable(self) -> None:
-        frame = build_spec_revision_frame(
+    def test_report_diagnostic_and_exception_are_one_model(self) -> None:
+        first = build_spec_revision_frame(
             revision="rev-1",
             text="trusted",
             utc="2026-08-30T00:00:00.000Z",
-            stream_id=STREAM_ID,
+            stream_id=RID,
         )
-        frame["payload"]["normative"]["text"] = "mutated"
+        registry = KindFamilyRegistry(
+            {"body.pulse": "body"},
+            genesis_hashes={RID: first["frame_hash"]},
+            verified=True,
+        )
+        first["payload"]["normative"]["text"] = "mutated"
+        report = check_frame(first, registry=registry)
+        self.assertIsInstance(report, VerificationReport)
+        self.assertFalse(report.ok)
+        diagnostic = report.diagnostics[-1]
+        self.assertIsInstance(diagnostic, Diagnostic)
+        self.assertIsInstance(diagnostic.context, MappingProxyType)
+        self.assertEqual(diagnostic.protocol_step, "2")
         with self.assertRaises(ProtocolError) as raised:
-            verify_frame(frame)
-        error = raised.exception
-        self.assertIsInstance(error, RappSDKError)
-        self.assertEqual(error.code, "payload-hash-mismatch")
-        self.assertEqual(error.step, "2")
-        self.assertIsInstance(error.context, MappingProxyType)
-        self.assertIn("expected_payload_hash", error.context)
-        self.assertEqual(error.as_dict()["code"], error.code)
-        equivalent = ProtocolError(
-            error.code,
-            error.message,
-            step=error.step,
-            context=dict(reversed(error.context.items())),
-        )
-        self.assertEqual(repr(error), repr(equivalent))
+            report.require(ProtocolError)
+        self.assertIs(raised.exception.diagnostic, diagnostic)
+        self.assertEqual(raised.exception.as_dict(), diagnostic.as_dict())
         with self.assertRaises(TypeError):
-            error.context["new"] = "value"
+            diagnostic.context["new"] = "value"
 
-    def test_revision_values_and_serialization_are_immutable(self) -> None:
-        chain = inline_chain()
-        revision = chain.head
-        with self.assertRaises(AttributeError):
-            chain.stream_id = "other"
-        self.assertIsInstance(revision, SpecRevision)
-        self.assertIsInstance(revision.address, RevisionAddress)
-        with self.assertRaises(dataclasses.FrozenInstanceError):
-            revision.seq = 99
-        with self.assertRaises(dataclasses.FrozenInstanceError):
-            revision.address.seq = 99
-
-        mutable_frame = revision.to_dict()
-        mutable_frame["seq"] = 99
-        self.assertEqual(revision.to_dict()["seq"], 1)
-        self.assertEqual(revision.frame_bytes, revision.to_json_bytes())
-        self.assertEqual(
-            revision.address.to_json_bytes(),
-            canonicalize(revision.address.as_dict()),
-        )
+    def test_chain_and_resolver_golden_path(self) -> None:
+        chain, registry, trust = inline_chain()
+        self.assertTrue(chain.trusted)
+        self.assertEqual(chain.resolve(revision="rev-2"), chain.head)
+        self.assertEqual(SpecResolver(chain).read(chain.head), b"two")
         encoded = chain.to_jsonl_bytes()
-        reloaded = SpecChain.from_jsonl(encoded)
+        reloaded = SpecChain.from_jsonl(
+            encoded,
+            registry=registry,
+            trust_policy=trust,
+        )
         self.assertEqual(reloaded.to_jsonl_bytes(), encoded)
-        self.assertEqual(repr(chain), repr(reloaded))
+        self.assertEqual(reloaded.head.address, chain.head.address)
+        with self.assertRaises(TypeError):
+            chain.resolve("rev-2")
 
-    def test_bytes_text_and_path_boundaries_are_explicit(self) -> None:
-        encoded = inline_chain().to_jsonl_bytes()
-        self.assertEqual(
-            SpecChain.from_jsonl_text(encoded.decode("utf-8")).head.revision,
-            "rev-2",
-        )
-        self.assertEqual(
-            SpecChain.from_jsonl(encoded.replace(b"\n", b"\r\n")).head.revision,
-            "rev-2",
-        )
-        with self.assertRaisesRegex(RappSDKError, "carriage return"):
-            SpecChain.from_jsonl(encoded.replace(b"\n", b"\r"))
-        with self.assertRaises(TypeError):
-            SpecChain.from_jsonl(encoded.decode("utf-8"))
-        with self.assertRaises(TypeError):
-            SpecChain.from_jsonl_text(encoded)
-        with self.assertRaises(TypeError):
-            SpecChain.load(b"chain.jsonl")
-        with self.assertRaises(TypeError):
-            ContentAddressedCache(b"cache")
-
-    def test_network_and_cache_configuration_is_read_only(self) -> None:
-        fetcher = HTTPSFetcher()
-        self.assertEqual(
-            fetcher.allowed_hosts,
-            frozenset({"raw.githubusercontent.com"}),
-        )
-        with self.assertRaises(AttributeError):
-            fetcher.timeout = 1.0
-        cache = ContentAddressedCache("cache")
-        with self.assertRaises(AttributeError):
-            cache.root = Path("elsewhere")
+    def test_error_hierarchy_remains_narrow(self) -> None:
+        self.assertTrue(issubclass(ProtocolError, RappSDKError))
+        self.assertTrue(issubclass(SpecChainError, RappSDKError))
+        self.assertFalse(issubclass(SpecChainError, ProtocolError))
+        self.assertTrue(issubclass(SpecResolutionError, SpecChainError))
+        self.assertTrue(issubclass(CacheIntegrityError, SpecResolutionError))
 
     def test_import_is_quiet_and_has_no_filesystem_side_effects(self) -> None:
         scratch = ROOT / "tests" / ".scratch-import"

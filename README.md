@@ -23,7 +23,13 @@ The first public package surface is a Python 3.11+, standard-library-only core
 for strict RAPP/1 frames and append-only specification chains:
 
 ```python
-from rapp_sdk import SpecChain, build_spec_revision_frame
+from rapp_sdk import (
+    KindFamilyRegistry,
+    SpecChain,
+    SpecResolver,
+    StreamTrustPolicy,
+    build_spec_revision_frame,
+)
 
 first = build_spec_revision_frame(
     revision="rev-1",
@@ -31,31 +37,47 @@ first = build_spec_revision_frame(
     utc="2026-08-30T00:00:00.000Z",
     stream_id="rappid:@example/spec:" + "0" * 64,
 )
-chain = SpecChain.from_frames([first])
-selected = chain.resolve("head")        # immutable SpecRevision
-normative_bytes = chain.materialize()   # always bytes
+registry = KindFamilyRegistry(
+    {"body.pulse": "body"},
+    genesis_hashes={first["stream_id"]: first["frame_hash"]},
+    verified=True,
+)
+trust = StreamTrustPolicy(
+    stream_id=first["stream_id"],
+    trusted_genesis_hash=first["frame_hash"],
+)
+chain = SpecChain.from_frames(
+    [first],
+    registry=registry,
+    trust_policy=trust,
+)
+normative_bytes = SpecResolver(chain).read(chain.head)
 ```
 
-It provides strict I-JSON parsing, authority-compatible canonicalization,
-domain-separated `H`/`Hb`, exact eleven-key frame construction and
-verification, immutable historical specification resolution, and a
+It provides strict I-JSON parsing, full RFC 8785 binary64 canonicalization,
+registered kind-family enforcement, immutable verified frames and streams,
+external genesis/head trust policy, explicit historical resolution, and a
 checksum-revalidating content-addressed cache. See
 [`docs/spec-chain.md`](docs/spec-chain.md).
 
 ### Stable imports
 
-- Protocol: `build_frame`, `verify_frame`, `verify_stream`, `canonicalize`,
-  `strict_json_loads`, `H`, and `Hb`
+- Protocol: `build_frame_mapping`, `check_frame`, `verify_frame`,
+  `check_stream`, `verify_stream`, `KindFamilyRegistry`,
+  `StreamTrustPolicy`, `VerifiedFrame`, and `VerifiedStream`
 - Specification chain: `SpecChain`, `SpecRevision`, `RevisionAddress`,
   `build_spec_revision_frame`
-- Resolution: `ImmutableSource`, `GitHubRawSource`, `HTTPSFetcher`,
-  `ContentAddressedCache`
+- Resolution: `SpecResolver` and `RevisionSource`
+- Reports: `Diagnostic` and `VerificationReport`
 - Schema: `SPEC_REVISION_SCHEMA_ID`, `read_spec_revision_schema`
 - Errors: `RappSDKError`, `ProtocolError`, `SpecChainError`,
   `SpecResolutionError`, `CacheIntegrityError`
 
 All public callables are typed, and the wheel includes a `py.typed` marker.
 Importing `rapp_sdk` performs no I/O or runtime dependency discovery.
+Advanced hashes, protocol constants, local-only verification, GitHub/HTTPS
+adapters, cache types, and limits live in the documented `rapp_sdk.protocol`,
+`rapp_sdk.resolution`, and `rapp_sdk.spec_chain` submodules.
 
 Run the no-network ergonomics example:
 
@@ -96,7 +118,9 @@ RAPP1_AUTHORITY_ROOT=/path/to/rapp-1 \
 
 ## License
 
-Released under the MIT License.
+Released under the MIT License. See `THIRD_PARTY_NOTICES.md` for the
+Apache-2.0-licensed JCS number-formatting lineage included in the stdlib-only
+implementation.
 
 <sub>RAPP, RAPP Brainstem, Twin in Residence, RAPP Flight Deck, and the RAPP family of
 names are trademarks of the RAPP project. First published 2026-07-18 as part of the RAPP ecosystem.</sub>

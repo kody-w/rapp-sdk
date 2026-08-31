@@ -14,7 +14,9 @@
     },
     "canonical_repo": {
       "type": "string",
-      "pattern": "^https://github\\.com/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/(?![A-Za-z0-9_.-]*\\.git$)[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$"
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^https://[^?#]+$"
     },
     "commit": {
       "type": "string",
@@ -24,7 +26,7 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 1024,
-      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*[\\\\%?#]).+$"
+      "pattern": "^(?!/)(?!.*//)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*[\\\\%?#\\u0000-\\u0020\\u007f])(?:[^/]+/)*[^/]+$"
     },
     "normative_sha256": {
       "$ref": "#/$defs/sha256"
@@ -33,7 +35,9 @@
       "oneOf": [
         {
           "type": "string",
-          "pattern": "^(0|[1-9][0-9]*)$"
+          "pattern": "^(0|[1-9][0-9]*)$",
+          "maxLength": 7,
+          "x-rapp-maximum": 1048576
         },
         {
           "type": "integer",
