@@ -125,6 +125,11 @@ schema = json.loads(read_spec_revision_schema())
 There is no second editable presentation copy. Wheel and source-distribution
 smoke tests install into separate virtual environments and require the
 installed resource to parse and byte-match this canonical source.
+The sdist smoke pins setuptools 84.0.0. If an interpreter's `venv` omits
+setuptools, the test requires an explicit local provider path, exposes it only
+through a backend-only overlay for the no-index build step, removes the bridge,
+and then proves under `-I` that `rapp_sdk` and its distribution metadata
+resolve inside the target venv.
 
 ## Offline authority parity
 

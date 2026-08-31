@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
+import json
 import os
 import shutil
 import subprocess
 import sys
 import venv
+from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +18,7 @@ SCHEMA = ROOT / "src" / "rapp_sdk" / "schemas" / (
     "rapp-spec-revision-v1.schema.json"
 )
 WORK = ROOT / ".distribution-smoke"
+PINNED_SETUPTOOLS_VERSION = "84.0.0"
 
 PROBE = r"""
 import hashlib
@@ -54,7 +58,13 @@ assert read_spec_revision_schema() == source
 assert hashlib.sha256(installed).hexdigest() == sys.argv[2]
 assert json.loads(installed)["$id"] == SPEC_REVISION_SCHEMA_ID
 assert SPEC_REVISION_SCHEMA_ID == "urn:rapp:schema:spec-revision:1"
-assert importlib.metadata.version("rapp-sdk") == rapp_sdk.__version__
+distribution = importlib.metadata.distribution("rapp-sdk")
+assert distribution.version == rapp_sdk.__version__
+environment_root = Path(sys.argv[4]).resolve()
+assert Path(rapp_sdk.__file__).resolve().is_relative_to(environment_root)
+assert Path(distribution.locate_file("")).resolve().is_relative_to(
+    environment_root
+)
 example = Path(sys.prefix) / "share" / "rapp-sdk" / "examples" / (
     "spec_chain_smoke.py"
 )
@@ -141,24 +151,153 @@ else:
 """
 
 
+@dataclass(frozen=True, slots=True)
+class BackendInfo:
+    version: str
+    location: Path
+
+
 def _python(environment: Path) -> Path:
     if os.name == "nt":
         return environment / "Scripts" / "python.exe"
     return environment / "bin" / "python"
 
 
-def _run(command: list[str], *, environment: dict[str, str]) -> None:
+def _run(
+    command: list[str],
+    *,
+    environment: dict[str, str],
+    capture: bool = True,
+) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         command,
         cwd=ROOT,
         env=environment,
-        capture_output=True,
+        capture_output=capture,
         text=True,
     )
     if result.returncode:
         raise RuntimeError(
             f"command failed: {command!r}\n{result.stdout}\n{result.stderr}"
         )
+    return result
+
+
+def _setuptools_info(
+    python: Path,
+    *,
+    environment: dict[str, str],
+) -> BackendInfo | None:
+    script = (
+        "import json,pathlib,setuptools;"
+        "print(json.dumps({'version':setuptools.__version__,"
+        "'location':str(pathlib.Path(setuptools.__file__).resolve().parents[1])}))"
+    )
+    result = subprocess.run(
+        [str(python), "-I", "-B", "-c", script],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode:
+        return None
+    value = json.loads(result.stdout)
+    return BackendInfo(value["version"], Path(value["location"]))
+
+
+def _select_backend_site(
+    bundled: BackendInfo | None,
+    provider_site: Path | None,
+) -> Path | None:
+    if bundled is not None:
+        if bundled.version != PINNED_SETUPTOOLS_VERSION:
+            if provider_site is None:
+                raise RuntimeError(
+                    "isolated venv setuptools version is not pinned and no "
+                    f"provider was supplied: {bundled.version}"
+                )
+        else:
+            return None
+    if provider_site is None:
+        raise RuntimeError(
+            "sdist venv has no setuptools; provide --setuptools-site or "
+            "RAPP_SDK_SETUPTOOLS_SITE"
+        )
+    return provider_site.resolve()
+
+
+def _site_packages(
+    python: Path,
+    *,
+    environment: dict[str, str],
+) -> Path:
+    result = _run(
+        [
+            str(python),
+            "-I",
+            "-B",
+            "-c",
+            "import sysconfig;print(sysconfig.get_paths()['purelib'])",
+        ],
+        environment=environment,
+    )
+    return Path(result.stdout.strip())
+
+
+def _bridge_sdist_backend(
+    python: Path,
+    *,
+    provider_site: Path | None,
+    environment: dict[str, str],
+) -> Path | None:
+    provider = _select_backend_site(
+        _setuptools_info(python, environment=environment),
+        provider_site,
+    )
+    if provider is None:
+        return None
+    selected = _backend_overlay(provider)
+    bridge = _site_packages(python, environment=environment) / (
+        "rapp_sdk_build_backend.pth"
+    )
+    bridge.write_text(
+        f"import sys; sys.path.insert(0, {str(selected)!r})\n",
+        encoding="utf-8",
+    )
+    injected = _setuptools_info(python, environment=environment)
+    if (
+        injected is None
+        or injected.version != PINNED_SETUPTOOLS_VERSION
+        or injected.location.resolve() != selected
+    ):
+        raise RuntimeError("pinned setuptools provider was not activated")
+    return bridge
+
+
+def _backend_overlay(provider_site: Path) -> Path:
+    overlay = WORK / f"setuptools-{PINNED_SETUPTOOLS_VERSION}"
+    if overlay.exists():
+        return overlay
+    required = (
+        "setuptools",
+        "_distutils_hack",
+        "pkg_resources",
+        f"setuptools-{PINNED_SETUPTOOLS_VERSION}.dist-info",
+    )
+    overlay.mkdir(parents=True)
+    for name in required:
+        source = provider_site / name
+        if not source.exists():
+            raise RuntimeError(
+                f"setuptools provider is missing pinned component: {source}"
+            )
+        destination = overlay / name
+        if source.is_dir():
+            shutil.copytree(source, destination)
+        else:
+            shutil.copy2(source, destination)
+    return overlay
 
 
 def _kind(path: Path) -> str:
@@ -169,8 +308,28 @@ def _kind(path: Path) -> str:
     raise ValueError(f"unsupported distribution artifact: {path}")
 
 
+def _arguments(arguments: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--setuptools-site",
+        type=Path,
+        default=(
+            Path(os.environ["RAPP_SDK_SETUPTOOLS_SITE"])
+            if os.environ.get("RAPP_SDK_SETUPTOOLS_SITE")
+            else None
+        ),
+        help=(
+            "site-packages containing setuptools "
+            f"{PINNED_SETUPTOOLS_VERSION} for sdist builds"
+        ),
+    )
+    parser.add_argument("artifacts", nargs=2)
+    return parser.parse_args(arguments)
+
+
 def main(arguments: list[str] | None = None) -> int:
-    paths = [Path(value).resolve() for value in (arguments or sys.argv[1:])]
+    options = _arguments(arguments or sys.argv[1:])
+    paths = [Path(value).resolve() for value in options.artifacts]
     by_kind = {_kind(path): path for path in paths}
     if set(by_kind) != {"wheel", "sdist"}:
         print("provide exactly one wheel and one .tar.gz sdist", file=sys.stderr)
@@ -195,19 +354,30 @@ def main(arguments: list[str] | None = None) -> int:
             isolated = WORK / kind
             venv.EnvBuilder(with_pip=True, clear=True).create(isolated)
             python = _python(isolated)
-            _run(
-                [
-                    str(python),
-                    "-m",
-                    "pip",
-                    "install",
-                    "--no-build-isolation",
-                    "--no-deps",
-                    "--no-compile",
-                    str(by_kind[kind]),
-                ],
-                environment=environment,
-            )
+            bridge = None
+            if kind == "sdist":
+                bridge = _bridge_sdist_backend(
+                    python,
+                    provider_site=options.setuptools_site,
+                    environment=environment,
+                )
+            try:
+                _run(
+                    [
+                        str(python),
+                        "-m",
+                        "pip",
+                        "install",
+                        "--no-build-isolation",
+                        "--no-deps",
+                        "--no-compile",
+                        str(by_kind[kind]),
+                    ],
+                    environment=environment,
+                )
+            finally:
+                if bridge is not None:
+                    bridge.unlink()
             _run(
                 [
                     str(python),
@@ -218,6 +388,7 @@ def main(arguments: list[str] | None = None) -> int:
                     str(SCHEMA),
                     source_hash,
                     str(ROOT / "examples" / "spec_chain_smoke.py"),
+                    str(isolated),
                 ],
                 environment=environment,
             )

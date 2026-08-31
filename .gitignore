@@ -6,5 +6,6 @@ __pycache__/
 .install-smoke/
 .sdist-smoke/
 .scratch/
+.scratch-*/
 build/
 dist/
