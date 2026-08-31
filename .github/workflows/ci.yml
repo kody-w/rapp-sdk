@@ -99,5 +99,6 @@ jobs:
         with:
           name: rapp-sdk-0.1.0
           path: .build-artifacts/
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
