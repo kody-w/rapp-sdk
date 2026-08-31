@@ -409,7 +409,7 @@ class PublicAPITests(unittest.TestCase):
         self.assertEqual(read_spec_revision_schema(), source_bytes)
         self.assertEqual(
             hashlib.sha256(source_bytes).hexdigest(),
-            "d7ca036110105aababf20730febc49810533942e19ab0ef1f6bb4563f3ba9222",
+            "d102762ba503da1825806c8298d19afc80fa8603c57846e5a64d9a74e85b7081",
         )
         self.assertEqual(
             json.loads(source_bytes)["$id"],
@@ -449,6 +449,49 @@ class PublicAPITests(unittest.TestCase):
         self.assertFalse(
             KindFamilyRegistry.local({"body.pulse": "body"}).verified
         )
+
+    def test_checkpoint_authenticates_exact_snapshot_and_integer_origin(self) -> None:
+        frame = build_spec_revision_frame(
+            revision="rev-checkpoint",
+            text="checkpoint",
+            utc="2026-08-30T00:00:00.000Z",
+            stream_id=RID,
+        )
+        document = checkpoint_document(frame)
+
+        def mutate_after_authentication(evidence: bytes) -> bool:
+            document["selected_head"]["seq"] = 99
+            document["kind_families"]["body.pulse"] = "swarm"
+            return True
+
+        checkpoint = AuthorityCheckpoint.from_authenticated(
+            document,
+            authenticator=mutate_after_authentication,
+        )
+        self.assertEqual(checkpoint.selected_head.seq, 0)
+        self.assertEqual(checkpoint.kind_families["body.pulse"], "body")
+
+        for invalid in (0.5, "0", False):
+            with self.subTest(invalid=invalid):
+                bad = checkpoint_document(frame)
+                bad["selected_head"]["seq"] = invalid
+                with self.assertRaisesRegex(ValueError, "exact JSON uint53"):
+                    AuthorityCheckpoint.from_authenticated(
+                        bad,
+                        authenticator=lambda evidence: True,
+                    )
+
+        exponent = canonicalize(checkpoint_document(frame)).replace(
+            b'"seq":0',
+            b'"seq":0e0',
+            1,
+        )
+        exponent_document = strict_json_loads(exponent)
+        with self.assertRaisesRegex(ValueError, "exact JSON uint53"):
+            AuthorityCheckpoint.from_authenticated(
+                exponent_document,
+                authenticator=lambda evidence: True,
+            )
 
     def test_report_diagnostic_and_exception_are_one_model(self) -> None:
         first = build_spec_revision_frame(

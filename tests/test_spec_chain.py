@@ -258,6 +258,26 @@ class SpecChainTests(unittest.TestCase):
             SpecResolver(pointer_chain).read(pointer_forgery)
         self.assertEqual(source_required.exception.code, "source-required")
 
+    def test_direct_constructor_cannot_splice_unrelated_revisions(self) -> None:
+        first = trusted_chain(
+            build_spec_revision_frame(
+                revision="rev-first",
+                text="first",
+                utc=UTC0,
+                stream_id=RID,
+            )
+        )
+        other = trusted_chain(
+            build_spec_revision_frame(
+                revision="rev-other",
+                text="other",
+                utc=UTC0,
+                stream_id=RID,
+            )
+        )
+        with self.assertRaisesRegex(TypeError, "from_"):
+            SpecChain(first._stream, (other.head,))
+
     def test_selector_api_is_keyword_only_and_labels_are_explicit(self) -> None:
         content = b"stable"
         first = pointer_frame(revision="rev-legacy", content=content)

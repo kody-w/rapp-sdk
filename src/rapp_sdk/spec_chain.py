@@ -46,7 +46,7 @@ _CANONICAL_REPOSITORY_RE = re.compile(
     r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)"
     r"(?:\.(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*"
     r"(?::443)?/"
-    r"(?!/)(?!.*//)(?!.*(?:^|/)\.\.?(?:/|$))"
+    r"(?!/)(?!.*//)(?!.*(?:^|/)\.\.?(?:/|(?![\s\S])))"
     r"(?!.*[\\%?#\x00-\x20\x7f])(?:[^/]+/)*[^/]+$",
     re.ASCII,
 )
@@ -604,6 +604,9 @@ def _jsonl_frames(
         raise RuntimeError("unreachable JSONL cursor state")
 
 
+_SPEC_CHAIN_CAPABILITY = object()
+
+
 class SpecChain:
     """Immutable revision index over a trusted or explicit local stream."""
 
@@ -616,28 +619,51 @@ class SpecChain:
         "_by_payload_hash",
     )
 
-    def __init__(
-        self,
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        raise TypeError("use a verified SpecChain.from_* constructor")
+
+    @classmethod
+    def _create(
+        cls,
         stream: VerifiedStream,
-        revisions: tuple[SpecRevision, ...],
-    ) -> None:
-        self._stream = stream
-        self._revisions = revisions
+        *,
+        deadline: float,
+        capability: object,
+    ) -> SpecChain:
+        if capability is not _SPEC_CHAIN_CAPABILITY:
+            raise PermissionError("SpecChain construction capability required")
+        revisions: list[SpecRevision] = []
+        for frame in stream.frames:
+            if time.monotonic() >= deadline:
+                _chain_fail(
+                    "verification-time-exceeded",
+                    "specification profile validation exceeded its time budget",
+                    location=f"frame[{frame.seq}]",
+                )
+            revisions.append(_profile_revision(frame))
+        revision_tuple = tuple(revisions)
+        value = object.__new__(cls)
+        value._stream = stream
+        value._revisions = revision_tuple
         by_revision: dict[str, list[SpecRevision]] = {}
-        if len({item.payload_hash for item in revisions}) != len(revisions):
+        if len({item.payload_hash for item in revision_tuple}) != len(
+            revision_tuple
+        ):
             _chain_fail(
                 "duplicate-payload",
                 "payload_hash is repeated in the specification stream",
                 location="chain",
             )
-        self._by_seq = MappingProxyType({item.seq: item for item in revisions})
-        self._by_frame_hash = MappingProxyType(
-            {item.frame_hash: item for item in revisions}
+        value._by_seq = MappingProxyType(
+            {item.seq: item for item in revision_tuple}
         )
-        self._by_payload_hash = MappingProxyType(
-            {item.payload_hash: item for item in revisions}
+        value._by_frame_hash = MappingProxyType(
+            {item.frame_hash: item for item in revision_tuple}
         )
-        for item in revisions:
+        value._by_payload_hash = MappingProxyType(
+            {item.payload_hash: item for item in revision_tuple}
+        )
+        for item in revision_tuple:
             aliases = by_revision.setdefault(item.revision, [])
             if aliases:
                 same_legacy_bytes = (
@@ -657,9 +683,10 @@ class SpecChain:
                         context={"revision": item.revision},
                     )
             aliases.append(item)
-        self._by_revision = MappingProxyType(
+        value._by_revision = MappingProxyType(
             {key: tuple(values) for key, values in by_revision.items()}
         )
+        return value
 
     @classmethod
     def _from_frames(
@@ -694,16 +721,11 @@ class SpecChain:
             stream = report.require(ProtocolError)
         except ProtocolError as exc:
             raise SpecChainError(exc.diagnostic) from exc
-        revisions: list[SpecRevision] = []
-        for frame in stream:
-            if time.monotonic() >= absolute_deadline:
-                _chain_fail(
-                    "verification-time-exceeded",
-                    "specification profile validation exceeded its time budget",
-                    location=f"frame[{frame.seq}]",
-                )
-            revisions.append(_profile_revision(frame))
-        return cls(stream, tuple(revisions))
+        return cls._create(
+            stream,
+            deadline=absolute_deadline,
+            capability=_SPEC_CHAIN_CAPABILITY,
+        )
 
     @classmethod
     def from_frames(
