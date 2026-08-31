@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rapp-sdk"
+version = "0.1.0"
+description = "Protocol and specification-chain primitives for RAPP SDK clients"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Kody Wildfeuer" }]
+keywords = ["agents", "protocol", "rapp", "sdk"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Typing :: Typed",
+]
+dependencies = []
+
+[project.optional-dependencies]
+test = ["jsonschema>=4.23,<5"]
+
+[project.urls]
+Homepage = "https://github.com/kody-w/rapp-sdk"
+Documentation = "https://github.com/kody-w/rapp-sdk/blob/main/docs/spec-chain.md"
+Repository = "https://github.com/kody-w/rapp-sdk"
+Issues = "https://github.com/kody-w/rapp-sdk/issues"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+rapp_sdk = ["py.typed"]
+"rapp_sdk.authority" = ["*.json"]
+"rapp_sdk.schemas" = ["*.json"]
+
+[tool.setuptools.data-files]
+"share/rapp-sdk" = ["DISCLAIMER.md", "THIRD_PARTY_NOTICES.md"]
+"share/rapp-sdk/docs" = ["docs/spec-chain.md"]
+"share/rapp-sdk/examples" = ["examples/spec_chain_smoke.py"]
+"share/rapp-sdk/licenses" = ["LICENSES/Apache-2.0.txt"]

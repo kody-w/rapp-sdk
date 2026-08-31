@@ -1,0 +1,38 @@
+{
+  "accepted_commit": "caf6ef276cafa92aa744499af90dc1a28559941a",
+  "bootstrap_profile_sha256": "1666e44acf532f854d4bf74868c9af9f9b362055692189ac858a7c8b52dcd5bb",
+  "canonical_repository": "https://github.com/kody-w/rapp-1",
+  "chain_sha256": "6974a0bd5f6344f72b728efed0a154109be8769ef4d956a827701d9b222f6018",
+  "frame_hashes": [
+    "a5aa6e6ba81d6b97b80ce46bc20905428d5679bb18309d176356bd194cdd005a",
+    "963bf0689eb294164029a9088910749446c4e0fe0757fd27988b8fc220e5ab36",
+    "8c78ac8415a48e8ff02d4c4363cf3afd2003399c76e64ad938609a7ca8fe7b23",
+    "587365ca3a04258348e943e709469d1eb5c07235d26e04d4637e3dffa9dd17c7",
+    "5aa99ae21b39b2c3e5e63c696dc3c34596aabbc721cda002b9c4f7ef100f7363",
+    "f7a423190f613f9d0de3c63fb8add1a1d032410f2c74eb79a201da6151a7107a",
+    "da8dd02d50796c57ac7f9b7b1d8fd86d8a2d10ba15d28776914e71118243ce12",
+    "3620f45825dbf73280a1df2db3aac4de87b07297afc35e1cee3034eb3c3ea6ef",
+    "65e2b1694f6c8d418bd66c7e8e8f567f798f5e9a210e68b9e0ed226aaf364786",
+    "24d8a02b1be5490c0d531dc568a4b6b580526015b7eb0b61b7062873cb8efbf3",
+    "d08fece2b3dd52593d7dad4602c0dd2f71e52e73d74c9813d90087f9015a495c",
+    "4a15c02725494680ee8d9ae53e342e59cee4bcc30792b8056529bbd2290d55d9",
+    "d2bcf3a642237634025fece571187fc7db0e0a473192b03858a5a6c9735b8cc0",
+    "bbcee75ebbbf82d11d8ffd666fdda34c8233642de6d6e4f45910d43a24a001e3",
+    "59629adab4e26d156f3d66ecfb766e08705919ea1d2adc92ba0ad2b17337dfc2"
+  ],
+  "genesis_frame_hash": "a5aa6e6ba81d6b97b80ce46bc20905428d5679bb18309d176356bd194cdd005a",
+  "kind_families": {
+    "body.pulse": "body"
+  },
+  "number_profile": "exact-integer",
+  "protected_ref": "refs/heads/main",
+  "schema": "rapp-authority-checkpoint/1",
+  "selected_head": {
+    "frame_hash": "59629adab4e26d156f3d66ecfb766e08705919ea1d2adc92ba0ad2b17337dfc2",
+    "payload_hash": "c7549bbd3e133b833930e24e008817ea295734b870f41706455d3f45821aba3a",
+    "seq": 14
+  },
+  "selected_normative_sha256": "d345235be5bc698d78c5893285abd09f2e62a398f781123d1de8da313a01c7de",
+  "selected_revision": "rev-14",
+  "stream_id": "rappid:@kody-w/rapp-1-anchor:a4298c417789ecff68b7be3df4d8b90d397c43f972eaf839977db16dbe02acc6"
+}
