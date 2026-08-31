@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import csv
+import hashlib
 import shutil
 import unittest
 from pathlib import Path
@@ -80,7 +82,16 @@ class DistributionPortabilityTests(unittest.TestCase):
         for relative, content in files.items():
             path = provider / relative
             path.write_text(content, encoding="utf-8")
-            rows.append([relative, "", str(path.stat().st_size)])
+            digest = base64.urlsafe_b64encode(
+                hashlib.sha256(path.read_bytes()).digest()
+            ).rstrip(b"=").decode()
+            rows.append(
+                [
+                    relative,
+                    f"sha256={digest}",
+                    str(path.stat().st_size),
+                ]
+            )
         record_relative = f"{dist_info.name}/RECORD"
         rows.append([record_relative, "", ""])
         with (provider / record_relative).open(
@@ -128,6 +139,23 @@ class DistributionPortabilityTests(unittest.TestCase):
             "tests.distribution_install_smoke.WORK",
             self.scratch / "work-missing",
         ), self.assertRaisesRegex(RuntimeError, "missing"):
+            _backend_overlay(provider)
+
+    def test_forged_empty_record_digest_is_rejected(self) -> None:
+        provider = self._provider()
+        dist_info = provider / (
+            f"setuptools-{PINNED_SETUPTOOLS_VERSION}.dist-info"
+        )
+        record = dist_info / "RECORD"
+        with record.open(encoding="utf-8") as stream:
+            rows = list(csv.reader(stream))
+        rows[0][1:] = ["", ""]
+        with record.open("w", newline="", encoding="utf-8") as stream:
+            csv.writer(stream).writerows(rows)
+        with mock.patch(
+            "tests.distribution_install_smoke.WORK",
+            self.scratch / "work-empty-digest",
+        ), self.assertRaisesRegex(RuntimeError, "lacks hash or size"):
             _backend_overlay(provider)
 
 

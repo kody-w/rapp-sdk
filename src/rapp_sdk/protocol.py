@@ -1924,6 +1924,7 @@ def _check_stream(
     iterator = iter(frames)
     verified: list[VerifiedFrame] = []
     seen_seq: dict[int, str] = {}
+    frames_by_seq: dict[int, VerifiedFrame] = {}
     seen_hashes: set[str] = set()
     stream_id = expected_stream_id
     while True:
@@ -1965,6 +1966,25 @@ def _check_stream(
             stream_id = candidate.stream_id
         previous_hash = seen_seq.get(candidate.seq)
         if previous_hash is not None:
+            predecessor = (
+                frames_by_seq.get(candidate.seq - 1)
+                if candidate.seq > 0
+                else None
+            )
+            linked = _link_diagnostic(
+                candidate,
+                head=predecessor,
+                location=location,
+            )
+            if linked is not None:
+                return VerificationReport(None, (linked,))
+            signature = _signature_diagnostic(
+                candidate,
+                signature_verifier=signature_verifier,
+                location=location,
+            )
+            if signature is not None:
+                return VerificationReport(None, (signature,))
             if previous_hash == candidate.frame_hash:
                 diagnostic = _diagnostic(
                     "duplicate-frame",
@@ -2015,6 +2035,7 @@ def _check_stream(
         if signature is not None:
             return VerificationReport(None, (signature,))
         seen_seq[candidate.seq] = candidate.frame_hash
+        frames_by_seq[candidate.seq] = candidate
         seen_hashes.add(candidate.frame_hash)
         verified.append(candidate)
     if not verified:

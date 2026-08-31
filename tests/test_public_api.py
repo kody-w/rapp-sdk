@@ -188,13 +188,13 @@ class PublicAPITests(unittest.TestCase):
 
     def test_diagnostic_code_catalog_is_stable(self) -> None:
         self.assertEqual(DIAGNOSTIC_CATALOG_VERSION, "1")
-        self.assertEqual(len(DIAGNOSTIC_CODES), 104)
+        self.assertEqual(len(DIAGNOSTIC_CODES), 105)
         self.assertEqual(DIAGNOSTIC_CODES, tuple(sorted(DIAGNOSTIC_CODES)))
         self.assertEqual(
             hashlib.sha256(
                 ("\n".join(DIAGNOSTIC_CODES) + "\n").encode()
             ).hexdigest(),
-            "8284b2963f36facccaa82251293cf141c498c261f6230113ee7ade4771c27411",
+            "10856cdc195d0e4dc52d9ffd1fb4f714ca4790a034e3cf56ea0af8206a7e0148",
         )
 
     def test_golden_callables_are_fully_annotated(self) -> None:

@@ -210,6 +210,15 @@ size and checksum. Writes use a same-directory temporary file, file `fsync`,
 atomic rename, and directory `fsync` where supported. A corrupt object is
 refused rather than silently repaired.
 
+On POSIX, every root/intermediate/leaf operation is descriptor-relative with
+`O_DIRECTORY`/`O_NOFOLLOW`, stable identity checks, and directory `fsync`.
+Windows rejects symlink/reparse components and revalidates identities around
+opens and replacement. Platforms without a safe guarantee fail closed.
+
+Inline, cached, and sourced normative content passes the same validator before
+return: exact size/SHA-256, strict UTF-8, no UTF-8 BOM or leading U+FEFF, and
+byte-identical UTF-8 round-trip.
+
 ```python
 from rapp_sdk import SpecResolver
 from rapp_sdk.resolution import ContentAddressedCache, GitHubRevisionSource

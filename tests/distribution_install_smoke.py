@@ -381,7 +381,11 @@ def _backend_overlay(provider_site: Path) -> Path:
                     raise RuntimeError(
                         f"setuptools RECORD file is missing: {source}"
                     )
-                _validate_record_entry(source, row)
+                _validate_record_entry(
+                    source,
+                    row,
+                    record_path=f"{dist_info.name}/RECORD",
+                )
                 destination = overlay.joinpath(*relative.parts)
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, destination)
@@ -394,19 +398,47 @@ def _backend_overlay(provider_site: Path) -> Path:
     return overlay
 
 
-def _validate_record_entry(source: Path, row: list[str]) -> None:
-    if len(row) < 3:
+def _validate_record_entry(
+    source: Path,
+    row: list[str],
+    *,
+    record_path: str,
+) -> None:
+    if len(row) != 3:
         raise RuntimeError(f"invalid setuptools RECORD row: {row!r}")
     digest_text, size_text = row[1], row[2]
     data = source.read_bytes()
-    if size_text and len(data) != int(size_text):
-        raise RuntimeError(f"setuptools RECORD size mismatch: {source}")
-    if not digest_text:
+    is_record = row[0] == record_path
+    if is_record:
+        if digest_text or size_text:
+            raise RuntimeError("setuptools RECORD must be self-unhashed")
         return
-    algorithm, encoded = digest_text.split("=", 1)
+    if not digest_text or not size_text:
+        raise RuntimeError(
+            f"setuptools RECORD entry lacks hash or size: {row[0]}"
+        )
+    if not size_text.isdecimal() or len(data) != int(size_text):
+        raise RuntimeError(f"setuptools RECORD size mismatch: {source}")
+    try:
+        algorithm, encoded = digest_text.split("=", 1)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"invalid setuptools RECORD digest: {source}"
+        ) from exc
     if algorithm != "sha256":
         raise RuntimeError(f"unsupported setuptools RECORD hash: {algorithm}")
-    expected = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+    try:
+        expected = base64.b64decode(
+            encoded + "=" * (-len(encoded) % 4),
+            altchars=b"-_",
+            validate=True,
+        )
+    except ValueError as exc:
+        raise RuntimeError(
+            f"invalid setuptools RECORD digest: {source}"
+        ) from exc
+    if base64.urlsafe_b64encode(expected).rstrip(b"=").decode() != encoded:
+        raise RuntimeError(f"noncanonical setuptools RECORD digest: {source}")
     if hashlib.sha256(data).digest() != expected:
         raise RuntimeError(f"setuptools RECORD hash mismatch: {source}")
 
