@@ -166,6 +166,30 @@ class ResolutionSecurityTests(unittest.TestCase):
         self.assertEqual(marker.read_bytes(), b"outside")
         self.assertEqual(list(outside.iterdir()), [marker])
 
+    def test_windows_replacement_seam_reopens_validates_and_cleans(self) -> None:
+        data = b"safe text\n"
+        replacement = b"evil text\n"
+        self.assertEqual(len(data), len(replacement))
+        digest = hashlib.sha256(data).hexdigest()
+        cache = ContentAddressedCache(self.scratch / "windows-cache")
+        real_replace = os.replace
+
+        def replace_then_corrupt(*args, **kwargs):
+            result = real_replace(*args, **kwargs)
+            cache.path_for(digest).write_bytes(replacement)
+            return result
+
+        with mock.patch(
+            "rapp_sdk.resolution.os.replace",
+            side_effect=replace_then_corrupt,
+        ), self.assertRaises(SpecResolutionError) as raised:
+            cache._put_windows(data, digest, len(data))
+        self.assertEqual(
+            raised.exception.code,
+            "normative-hash-mismatch",
+        )
+        self.assertFalse(cache.path_for(digest).exists())
+
 
 if __name__ == "__main__":
     unittest.main()

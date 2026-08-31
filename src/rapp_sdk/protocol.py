@@ -891,6 +891,12 @@ class PersistedHead:
 _AUTHORITY_CAPABILITY = object()
 
 
+def _exact_integer_origin(value: JsonValue) -> bool:
+    if isinstance(value, _ParsedInteger):
+        return re.fullmatch(r"-?(?:0|[1-9][0-9]*)", value.token) is not None
+    return type(value) is int
+
+
 @dataclass(frozen=True, slots=True, init=False)
 class AuthorityCheckpoint:
     """Authenticated authority snapshot binding all accepted frame hashes."""
@@ -920,13 +926,22 @@ class AuthorityCheckpoint:
 
         if not callable(authenticator):
             raise TypeError("authenticator must be callable")
+        original_selected = document.get("selected_head")
+        exact_seq_origin = (
+            type(original_selected) is dict
+            and _exact_integer_origin(original_selected.get("seq"))
+        )
         evidence = canonicalize(dict(document))
         if authenticator(evidence) is not True:
             raise ValueError("authority checkpoint authentication failed")
+        snapshot = strict_json_loads(evidence)
+        if type(snapshot) is not dict:
+            raise ValueError("authenticated checkpoint is not an object")
         return cls._create(
-            document,
+            snapshot,
             evidence_id=hashlib.sha256(evidence).hexdigest(),
             capability=_AUTHORITY_CAPABILITY,
+            exact_seq_origin=exact_seq_origin,
         )
 
     @classmethod
@@ -936,6 +951,7 @@ class AuthorityCheckpoint:
         *,
         evidence_id: str,
         capability: object,
+        exact_seq_origin: bool | None = None,
     ) -> AuthorityCheckpoint:
         if capability is not _AUTHORITY_CAPABILITY:
             raise PermissionError("authority checkpoint capability required")
@@ -964,11 +980,21 @@ class AuthorityCheckpoint:
             if type(item) is not str:
                 raise TypeError(f"authority checkpoint {name} must be text")
             object.__setattr__(value, name, item)
+        selected_seq = selected["seq"]
+        if (
+            not _exact_integer_origin(selected_seq)
+            or exact_seq_origin is False
+            or not 0 <= selected_seq <= MAX_SAFE_INTEGER
+        ):
+            raise ValueError(
+                "authority checkpoint selected_head.seq must be an exact "
+                "JSON uint53 integer"
+            )
         object.__setattr__(
             value,
             "selected_head",
             PersistedHead(
-                seq=int(selected["seq"]),
+                seq=int(selected_seq),
                 frame_hash=selected["frame_hash"],
             ),
         )

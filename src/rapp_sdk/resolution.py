@@ -907,9 +907,36 @@ class ContentAddressedCache:
                     str(path),
                 )
             os.replace(temporary, path)
-            self._windows_identity(path)
-            self._revalidate_windows(directories)
-            return path
+            installed_identity = self._windows_identity(path)
+            try:
+                self._revalidate_windows(directories)
+                verified = self._get_windows(sha256, expected_bytes)
+                if verified is None:
+                    raise self._unsafe(
+                        "cache leaf disappeared after replacement",
+                        str(path),
+                    )
+                if self._windows_identity(path) != installed_identity:
+                    raise self._unsafe(
+                        "cache leaf identity changed after validation",
+                        str(path),
+                    )
+                self._revalidate_windows(directories)
+                return path
+            except Exception as validation_error:
+                try:
+                    if (
+                        os.path.lexists(path)
+                        and self._windows_identity(path) == installed_identity
+                    ):
+                        path.unlink()
+                    self._revalidate_windows(directories)
+                except Exception as cleanup_error:
+                    raise self._unsafe(
+                        "cannot safely remove failed cache replacement",
+                        str(path),
+                    ) from cleanup_error
+                raise
         finally:
             try:
                 temporary.unlink()

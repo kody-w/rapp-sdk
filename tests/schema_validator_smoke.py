@@ -95,6 +95,23 @@ def main() -> int:
     inline_string = copy.deepcopy(inline)
     inline_string["normative"]["bytes"] = "4"
     rejected.append(inline_string)
+    for field in (
+        "revision",
+        "canonical_repo",
+        "commit",
+        "normative_path",
+        "normative_sha256",
+        "normative_bytes",
+    ):
+        trailing_lf = copy.deepcopy(pointer)
+        trailing_lf[field] = str(trailing_lf[field]) + "\n"
+        rejected.append(trailing_lf)
+    media_type_lf = copy.deepcopy(inline)
+    media_type_lf["normative"]["media_type"] += "\n"
+    rejected.append(media_type_lf)
+    inline_hash_lf = copy.deepcopy(inline)
+    inline_hash_lf["normative"]["sha256"] += "\n"
+    rejected.append(inline_hash_lf)
 
     for payload in accepted:
         if list(validator.iter_errors(payload)):
