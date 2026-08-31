@@ -394,6 +394,55 @@ class VerificationTests(unittest.TestCase):
             )
         self.assertEqual(raised.exception.code, "fork-detected")
 
+    def test_invalid_competing_child_is_not_classified_as_fork(self) -> None:
+        first = genesis()
+        left = successor(first, {"branch": "left"})
+        policy, trusted = authority(first, left)
+
+        wrong_prev = successor(first, {"branch": "wrong-prev"})
+        wrong_prev["prev"] = "0" * 64
+        wrong_prev["frame_hash"] = H(
+            WAVE_SPACE,
+            {
+                key: value
+                for key, value in wrong_prev.items()
+                if key not in {"frame_hash", "sig"}
+            },
+        )
+        wrong_prev_report = check_stream(
+            [first, left, wrong_prev],
+            registry=policy,
+            trust_policy=trusted,
+        )
+        self.assertEqual(
+            wrong_prev_report.diagnostics[-1].code,
+            "previous-payload-mismatch",
+        )
+
+        bad_signature = build_frame_mapping(
+            "body.pulse",
+            RID,
+            1,
+            UTC1,
+            {"branch": "bad-signature"},
+            first["payload_hash"],
+            sig=jws(),
+        )
+        bad_signature_report = check_stream(
+            [first, left, bad_signature],
+            registry=policy,
+            trust_policy=trusted,
+            signature_verifier=lambda frame: (False, "bad signature"),
+        )
+        self.assertEqual(
+            bad_signature_report.diagnostics[-1].code,
+            "signature-invalid",
+        )
+        self.assertEqual(
+            bad_signature_report.diagnostics[-1].protocol_step,
+            "6",
+        )
+
     def test_replacement_genesis_stale_prefix_and_known_conflict_are_refused(
         self,
     ) -> None:

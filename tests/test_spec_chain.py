@@ -455,7 +455,49 @@ class SpecChainTests(unittest.TestCase):
         )
         with self.assertRaises(SpecResolutionError) as cache_error:
             SpecResolver(chain, cache=cache).read(chain.head)
-        self.assertEqual(cache_error.exception.code, "cached-hash-mismatch")
+        self.assertEqual(cache_error.exception.code, "normative-hash-mismatch")
+
+    def test_normative_text_validation_covers_inline_cache_and_source(self) -> None:
+        inline_bom = build_spec_revision_frame(
+            revision="rev-bom",
+            text="\ufeffinline",
+            utc=UTC0,
+            stream_id=RID,
+        )
+        inline_chain = trusted_chain(inline_bom)
+        with self.assertRaises(SpecResolutionError) as inline_error:
+            SpecResolver(inline_chain).read(inline_chain.head)
+        self.assertEqual(inline_error.exception.code, "normative-bom")
+        with self.assertRaises(SpecChainError):
+            build_spec_revision_frame(
+                revision="rev-invalid",
+                text="\ud800",
+                utc=UTC0,
+                stream_id=RID,
+            )
+
+        for content, code in (
+            (b"\xff", "invalid-normative-utf8"),
+            (b"\xef\xbb\xbfsource", "normative-bom"),
+        ):
+            with self.subTest(path="source", code=code):
+                chain = trusted_chain(pointer_frame(content=content))
+                with self.assertRaises(SpecResolutionError) as source_error:
+                    SpecResolver(
+                        chain,
+                        source=MappingRevisionSource(content),
+                    ).read(chain.head)
+                self.assertEqual(source_error.exception.code, code)
+
+            with self.subTest(path="cache", code=code):
+                chain = trusted_chain(pointer_frame(content=content))
+                cache = ContentAddressedCache(self.scratch / f"cache-{code}")
+                cache_path = cache.path_for(chain.head.normative_sha256)
+                cache_path.parent.mkdir(parents=True)
+                cache_path.write_bytes(content)
+                with self.assertRaises(SpecResolutionError) as cache_error:
+                    SpecResolver(chain, cache=cache).read(chain.head)
+                self.assertEqual(cache_error.exception.code, code)
 
     def test_github_interpretation_is_isolated_in_source_adapter(self) -> None:
         chain = trusted_chain(pointer_frame())

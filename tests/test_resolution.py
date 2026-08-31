@@ -1,9 +1,18 @@
 from __future__ import annotations
 
+import hashlib
+import os
+import shutil
 import unittest
+from pathlib import Path
+from unittest import mock
 
-from rapp_sdk import ContentLocator, SpecResolutionError
-from rapp_sdk.resolution import GitHubRevisionSource, HTTPSFetcher
+from rapp_sdk import CacheIntegrityError, ContentLocator, SpecResolutionError
+from rapp_sdk.resolution import (
+    ContentAddressedCache,
+    GitHubRevisionSource,
+    HTTPSFetcher,
+)
 
 REPOSITORY = "https://github.com/example/specification"
 COMMIT = "a" * 40
@@ -49,6 +58,14 @@ def locator(*, commit: str = COMMIT, path: str = "SPEC.md") -> ContentLocator:
 
 
 class ResolutionSecurityTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.scratch = Path(__file__).resolve().parent / ".scratch-cache"
+        shutil.rmtree(self.scratch, ignore_errors=True)
+        self.scratch.mkdir()
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.scratch, ignore_errors=True)
+
     def test_https_fetcher_rechecks_redirect_final_scheme_and_host(self) -> None:
         expected = (
             "https://raw.githubusercontent.com/example/specification/"
@@ -73,6 +90,81 @@ class ResolutionSecurityTests(unittest.TestCase):
         with self.assertRaises(SpecResolutionError) as traversal:
             GitHubRevisionSource.raw_url(locator(path="../SPEC.md"))
         self.assertEqual(traversal.exception.code, "unsafe-path")
+
+    @unittest.skipUnless(os.name == "posix", "POSIX descriptor traversal")
+    def test_cache_rejects_symlinked_root_intermediate_and_leaf(self) -> None:
+        data = b"safe text\n"
+        digest = hashlib.sha256(data).hexdigest()
+        outside = self.scratch / "outside"
+        outside.mkdir()
+        marker = outside / "marker"
+        marker.write_bytes(b"outside")
+
+        root_link = self.scratch / "root-link"
+        root_link.symlink_to(outside, target_is_directory=True)
+        root_cache = ContentAddressedCache(root_link)
+        with self.assertRaises(CacheIntegrityError):
+            root_cache.get(digest, len(data))
+        with self.assertRaises(CacheIntegrityError):
+            root_cache.put(data, digest, len(data))
+
+        intermediate_root = self.scratch / "intermediate"
+        intermediate_root.mkdir()
+        (intermediate_root / "sha256").symlink_to(
+            outside,
+            target_is_directory=True,
+        )
+        intermediate_cache = ContentAddressedCache(intermediate_root)
+        with self.assertRaises(CacheIntegrityError):
+            intermediate_cache.get(digest, len(data))
+        with self.assertRaises(CacheIntegrityError):
+            intermediate_cache.put(data, digest, len(data))
+
+        leaf_cache = ContentAddressedCache(self.scratch / "leaf")
+        leaf = leaf_cache.put(data, digest, len(data))
+        leaf.unlink()
+        leaf.symlink_to(marker)
+        with self.assertRaises(CacheIntegrityError):
+            leaf_cache.get(digest, len(data))
+        with self.assertRaises(CacheIntegrityError):
+            leaf_cache.put(data, digest, len(data))
+
+        self.assertEqual(marker.read_bytes(), b"outside")
+        self.assertEqual(list(outside.iterdir()), [marker])
+
+    @unittest.skipUnless(os.name == "posix", "POSIX descriptor traversal")
+    def test_cache_swap_race_never_writes_outside_root(self) -> None:
+        data = b"safe text\n"
+        digest = hashlib.sha256(data).hexdigest()
+        root = self.scratch / "cache"
+        outside = self.scratch / "outside"
+        outside.mkdir()
+        marker = outside / "marker"
+        marker.write_bytes(b"outside")
+        cache = ContentAddressedCache(root)
+        real_replace = os.replace
+        swapped = False
+
+        def swap_then_replace(*args, **kwargs):
+            nonlocal swapped
+            if not swapped:
+                prefix = cache.path_for(digest).parent
+                moved = root / "moved-prefix"
+                prefix.rename(moved)
+                prefix.symlink_to(outside, target_is_directory=True)
+                swapped = True
+            return real_replace(*args, **kwargs)
+
+        with mock.patch(
+            "rapp_sdk.resolution.os.replace",
+            side_effect=swap_then_replace,
+        ), self.assertRaises(CacheIntegrityError):
+            cache.put(data, digest, len(data))
+
+        moved_leaf = root / "moved-prefix" / digest[2:]
+        self.assertFalse(moved_leaf.exists())
+        self.assertEqual(marker.read_bytes(), b"outside")
+        self.assertEqual(list(outside.iterdir()), [marker])
 
 
 if __name__ == "__main__":
