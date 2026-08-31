@@ -139,6 +139,8 @@ setuptools, the test requires an explicit local provider path, exposes it only
 through a backend-only overlay for the no-index build step, removes the bridge,
 and then proves under `-I` that `rapp_sdk` and its distribution metadata
 resolve inside the target venv.
+The overlay closure is derived from the pinned setuptools distribution's
+standard metadata and RECORD rather than a hardcoded package list.
 
 ## Offline authority parity
 

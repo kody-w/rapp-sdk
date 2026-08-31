@@ -86,15 +86,19 @@ For interpreters whose standard `venv` omits setuptools, provide a local
 site-packages directory containing the pinned setuptools 84.0.0 backend:
 
 ```console
-RAPP_SDK_SETUPTOOLS_SITE=/path/to/local/site-packages \
+python3 -m pip install --target .setuptools-provider setuptools==84.0.0
+RAPP_SDK_SETUPTOOLS_SITE=.setuptools-provider \
   python3.14 tests/distribution_install_smoke.py \
   .build-artifacts/rapp_sdk-0.1.0-py3-none-any.whl \
   .build-artifacts/rapp_sdk-0.1.0.tar.gz
 ```
 
-The gate copies only the pinned setuptools components into a temporary backend
-overlay. Its bridge is active only while building the sdist, uses
-`PIP_NO_INDEX=1`, and is removed before the isolated `-I` runtime probe.
+The gate derives the backend-only overlay from the pinned distribution's
+`METADATA`, `top_level.txt`, and `RECORD`. Optional removed modules such as
+`pkg_resources` are not assumed, unrelated provider packages are excluded,
+and every copied file is RECORD-verified. The bridge is active only while
+building the sdist, uses `PIP_NO_INDEX=1`, and is removed before the isolated
+`-I` runtime probe.
 Install validation dependencies with the pinned test extra; they are not
 runtime dependencies:
 

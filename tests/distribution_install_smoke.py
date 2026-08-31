@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import csv
 import hashlib
 import json
 import os
@@ -11,7 +13,7 @@ import subprocess
 import sys
 import venv
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = ROOT / "src" / "rapp_sdk" / "schemas" / (
@@ -185,12 +187,23 @@ else:
 class BackendInfo:
     version: str
     location: Path
+    backend_location: Path
 
 
 def _python(environment: Path) -> Path:
     if os.name == "nt":
-        return environment / "Scripts" / "python.exe"
-    return environment / "bin" / "python"
+        candidates = (environment / "Scripts" / "python.exe",)
+    else:
+        candidates = (
+            environment / "bin" / "python",
+            environment / "bin" / "python3",
+            environment / "bin" / f"python{sys.version_info.major}.{sys.version_info.minor}",
+            environment / "bin" / "𝜋thon",
+        )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise RuntimeError(f"venv has no Python executable: {environment}")
 
 
 def _run(
@@ -219,9 +232,10 @@ def _setuptools_info(
     environment: dict[str, str],
 ) -> BackendInfo | None:
     script = (
-        "import json,pathlib,setuptools;"
+        "import json,pathlib,setuptools,setuptools.build_meta;"
         "print(json.dumps({'version':setuptools.__version__,"
-        "'location':str(pathlib.Path(setuptools.__file__).resolve().parents[1])}))"
+        "'location':str(pathlib.Path(setuptools.__file__).resolve().parents[1]),"
+        "'backend':str(pathlib.Path(setuptools.build_meta.__file__).resolve())}))"
     )
     result = subprocess.run(
         [str(python), "-I", "-B", "-c", script],
@@ -233,7 +247,11 @@ def _setuptools_info(
     if result.returncode:
         return None
     value = json.loads(result.stdout)
-    return BackendInfo(value["version"], Path(value["location"]))
+    return BackendInfo(
+        value["version"],
+        Path(value["location"]),
+        Path(value["backend"]),
+    )
 
 
 def _select_backend_site(
@@ -300,6 +318,7 @@ def _bridge_sdist_backend(
         injected is None
         or injected.version != PINNED_SETUPTOOLS_VERSION
         or injected.location.resolve() != selected
+        or not injected.backend_location.resolve().is_relative_to(selected)
     ):
         raise RuntimeError("pinned setuptools provider was not activated")
     return bridge
@@ -307,27 +326,89 @@ def _bridge_sdist_backend(
 
 def _backend_overlay(provider_site: Path) -> Path:
     overlay = WORK / f"setuptools-{PINNED_SETUPTOOLS_VERSION}"
-    if overlay.exists():
-        return overlay
-    required = (
-        "setuptools",
-        "_distutils_hack",
-        "pkg_resources",
-        f"setuptools-{PINNED_SETUPTOOLS_VERSION}.dist-info",
+    shutil.rmtree(overlay, ignore_errors=True)
+    dist_info = provider_site / (
+        f"setuptools-{PINNED_SETUPTOOLS_VERSION}.dist-info"
     )
-    overlay.mkdir(parents=True)
-    for name in required:
-        source = provider_site / name
-        if not source.exists():
+    metadata = dist_info / "METADATA"
+    record = dist_info / "RECORD"
+    top_level = dist_info / "top_level.txt"
+    for required in (metadata, record, top_level):
+        if not required.is_file():
             raise RuntimeError(
-                f"setuptools provider is missing pinned component: {source}"
+                f"setuptools provider is missing required metadata: {required}"
             )
-        destination = overlay / name
-        if source.is_dir():
-            shutil.copytree(source, destination)
-        else:
-            shutil.copy2(source, destination)
+    metadata_text = metadata.read_text(encoding="utf-8")
+    if (
+        "\nName: setuptools\n" not in f"\n{metadata_text}"
+        or f"\nVersion: {PINNED_SETUPTOOLS_VERSION}\n"
+        not in f"\n{metadata_text}"
+    ):
+        raise RuntimeError("setuptools provider metadata does not match the pin")
+    package_roots = {
+        line.strip()
+        for line in top_level.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    }
+    if "setuptools" not in package_roots:
+        raise RuntimeError("setuptools provider does not own setuptools package")
+    if any(
+        not name.replace("_", "").isalnum()
+        for name in package_roots
+    ):
+        raise RuntimeError("setuptools provider has an unsafe top-level package")
+    allowed_roots = package_roots | {dist_info.name}
+    overlay.mkdir(parents=True)
+    copied = 0
+    try:
+        with record.open(newline="", encoding="utf-8") as stream:
+            for row in csv.reader(stream):
+                relative = PurePosixPath(row[0])
+                if (
+                    relative.is_absolute()
+                    or ".." in relative.parts
+                    or not relative.parts
+                ):
+                    raise RuntimeError(
+                        f"unsafe setuptools RECORD path: {row[0]}"
+                    )
+                if relative.parts[0] not in allowed_roots:
+                    continue
+                if "__pycache__" in relative.parts or relative.suffix == ".pyc":
+                    continue
+                source = provider_site.joinpath(*relative.parts)
+                if not source.is_file():
+                    raise RuntimeError(
+                        f"setuptools RECORD file is missing: {source}"
+                    )
+                _validate_record_entry(source, row)
+                destination = overlay.joinpath(*relative.parts)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
+                copied += 1
+        if copied == 0 or not (overlay / "setuptools" / "build_meta.py").is_file():
+            raise RuntimeError("setuptools build_meta closure is incomplete")
+    except Exception:
+        shutil.rmtree(overlay, ignore_errors=True)
+        raise
     return overlay
+
+
+def _validate_record_entry(source: Path, row: list[str]) -> None:
+    if len(row) < 3:
+        raise RuntimeError(f"invalid setuptools RECORD row: {row!r}")
+    digest_text, size_text = row[1], row[2]
+    data = source.read_bytes()
+    if size_text and len(data) != int(size_text):
+        raise RuntimeError(f"setuptools RECORD size mismatch: {source}")
+    if not digest_text:
+        return
+    algorithm, encoded = digest_text.split("=", 1)
+    if algorithm != "sha256":
+        raise RuntimeError(f"unsupported setuptools RECORD hash: {algorithm}")
+    expected = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+    if hashlib.sha256(data).digest() != expected:
+        raise RuntimeError(f"setuptools RECORD hash mismatch: {source}")
 
 
 def _kind(path: Path) -> str:
