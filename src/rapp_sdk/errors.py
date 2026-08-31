@@ -103,10 +103,17 @@ class RingManifestError(RappSDKError):
     operation = "ring-manifest"
 
 
+class ProjectProtocolError(RappSDKError):
+    """A RAPP Projects frame, checkpoint, or project egg was invalid."""
+
+    operation = "projects"
+
+
 __all__ = (
     "CacheIntegrityError",
     "ErrorContext",
     "ProtocolError",
+    "ProjectProtocolError",
     "RappSDKError",
     "RingManifestError",
     "SpecChainError",

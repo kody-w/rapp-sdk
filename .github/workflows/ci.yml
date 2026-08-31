@@ -97,11 +97,11 @@ jobs:
           RAPP_SDK_SETUPTOOLS_SITE: .setuptools-provider
         run: |
           python tests/distribution_install_smoke.py \
-            .build-artifacts/rapp_sdk-0.1.0-py3-none-any.whl \
-            .build-artifacts/rapp_sdk-0.1.0.tar.gz
+            .build-artifacts/rapp_sdk-0.2.0-py3-none-any.whl \
+            .build-artifacts/rapp_sdk-0.2.0.tar.gz
       - uses: actions/upload-artifact@v7
         with:
-          name: rapp-sdk-0.1.0
+          name: rapp-sdk-0.2.0
           path: .build-artifacts/
           include-hidden-files: true
           if-no-files-found: error

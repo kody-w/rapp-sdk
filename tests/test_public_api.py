@@ -74,8 +74,16 @@ ROOT_EXPORTS = (
     "DiagnosticStatus",
     "KindFamilyRegistry",
     "PROTOCOL_VERSION",
+    "PROJECT_EGG_SCHEMA",
+    "PROJECT_EGG_VARIANT",
+    "PROJECT_EVENTS",
+    "PROJECT_FRAME_KIND",
+    "PROJECT_FRAME_KINDS",
     "PersistedHead",
     "ProtocolError",
+    "ProjectActor",
+    "ProjectCheckpoint",
+    "ProjectProtocolError",
     "RappSDKError",
     "RING_YARD_MANIFEST_SCHEMA_ID",
     "RevisionAddress",
@@ -97,6 +105,11 @@ ROOT_EXPORTS = (
     "__version_info__",
     "build_frame_mapping",
     "build_default_ring_yard_manifest",
+    "build_project_egg_manifest",
+    "build_project_frame",
+    "build_project_rappid",
+    "pack_project_egg",
+    "project_egg_address",
     "build_spec_revision_frame",
     "canonicalize",
     "check_frame",
@@ -106,12 +119,17 @@ ROOT_EXPORTS = (
     "ports_for_cell",
     "read_ring_yard_manifest_schema",
     "read_spec_revision_schema",
+    "project_kind_registry",
+    "read_project_egg",
     "selected_authority_checkpoint",
     "selected_authority_registry",
     "selected_authority_trust_policy",
     "strict_json_loads",
     "verify_frame",
     "verify_ring_yard_manifest",
+    "validate_project_payload",
+    "verify_project_egg_manifest",
+    "verify_project_stream",
     "verify_stream",
 )
 
@@ -200,19 +218,19 @@ class PublicAPITests(unittest.TestCase):
         metadata = tomllib.loads((ROOT / "pyproject.toml").read_text())
         self.assertEqual(rapp_sdk.__version__, metadata["project"]["version"])
         self.assertEqual(rapp_sdk.VERSION, rapp_sdk.__version_info__)
-        self.assertEqual(rapp_sdk.__version_info__, (0, 1, 0))
+        self.assertEqual(rapp_sdk.__version_info__, (0, 2, 0))
         self.assertEqual(rapp_sdk.PROTOCOL_VERSION, "rapp/1")
         self.assertTrue(files("rapp_sdk").joinpath("py.typed").is_file())
 
     def test_diagnostic_code_catalog_is_stable(self) -> None:
-        self.assertEqual(DIAGNOSTIC_CATALOG_VERSION, "1")
-        self.assertEqual(len(DIAGNOSTIC_CODES), 122)
+        self.assertEqual(DIAGNOSTIC_CATALOG_VERSION, "2")
+        self.assertEqual(len(DIAGNOSTIC_CODES), 139)
         self.assertEqual(DIAGNOSTIC_CODES, tuple(sorted(DIAGNOSTIC_CODES)))
         self.assertEqual(
             hashlib.sha256(
                 ("\n".join(DIAGNOSTIC_CODES) + "\n").encode()
             ).hexdigest(),
-            "855f36add3e56d913f2a441fcd56806cbd170a340236152a2721be161e2e3365",
+            "3c896a2723b822a6b595c359ca02bbfff35869add07fe93add80152f9add55ee",
         )
 
     def test_golden_callables_are_fully_annotated(self) -> None:
