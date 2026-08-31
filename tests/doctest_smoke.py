@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import doctest
 
-from rapp_sdk import protocol, reports, schemas
+from rapp_sdk import protocol, reports, ring_manifest, schemas
 
 
 def main() -> int:
     failed = 0
     attempted = 0
-    for module in (protocol, reports, schemas):
+    for module in (protocol, reports, ring_manifest, schemas):
         result = doctest.testmod(module)
         failed += result.failed
         attempted += result.attempted

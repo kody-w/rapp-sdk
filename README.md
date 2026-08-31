@@ -44,6 +44,13 @@ external genesis/head trust policy, explicit historical resolution, and a
 checksum-revalidating content-addressed cache. See
 [`docs/spec-chain.md`](docs/spec-chain.md).
 
+The SDK includes the closed `rapp-ring-yard/1` manifest: a deterministic
+four-track by five-ring yard with explicit cell RAPPIDs, isolated paths,
+content-addressed artifacts, fixed ports, probe contracts, bounded budgets,
+and declared scheduler/plan limits. It describes all twenty cells without
+starting any of them. See
+[`docs/ring-yard-manifest.md`](docs/ring-yard-manifest.md).
+
 ### Stable imports
 
 - Protocol: `build_frame_mapping`, `check_frame`, `verify_frame`,
@@ -54,10 +61,14 @@ checksum-revalidating content-addressed cache. See
 - Specification chain: `SpecChain`, `SpecRevision`, `RevisionAddress`,
   `build_spec_revision_frame`
 - Resolution: `SpecResolver` and `RevisionSource`
+- Ring yard: `RingYardManifest`, `build_default_ring_yard_manifest`,
+  `check_ring_yard_manifest`, `check_ring_yard_manifest_semantics`,
+  `verify_ring_yard_manifest`, `ports_for_cell`
 - Reports: `Diagnostic` and `VerificationReport`
-- Schema: `SPEC_REVISION_SCHEMA_ID`, `read_spec_revision_schema`
+- Schema: `SPEC_REVISION_SCHEMA_ID`, `read_spec_revision_schema`,
+  `RING_YARD_MANIFEST_SCHEMA_ID`, `read_ring_yard_manifest_schema`
 - Errors: `RappSDKError`, `ProtocolError`, `SpecChainError`,
-  `SpecResolutionError`, `CacheIntegrityError`
+  `SpecResolutionError`, `CacheIntegrityError`, `RingManifestError`
 
 All public callables are typed, and the wheel includes a `py.typed` marker.
 Importing `rapp_sdk` performs no I/O or runtime dependency discovery.
@@ -76,6 +87,7 @@ Mandatory release gates:
 ```console
 python3 -m unittest discover -v
 python3 tests/schema_validator_smoke.py
+python3 tests/ring_manifest_schema_smoke.py
 PYTHONPATH=src python3 tests/doctest_smoke.py
 python3 -m build --no-isolation --outdir .build-artifacts
 python3 tests/distribution_install_smoke.py \
@@ -118,6 +130,29 @@ from rapp_sdk import read_spec_revision_schema
 
 schema_bytes = read_spec_revision_schema()
 ```
+
+The closed ring-yard schema is also a canonical package resource. Draft
+2020-12 covers structure and locally expressible constraints; conforming
+validation must also apply the bundled semantic report because standard JSON
+Schema cannot compare arbitrary sibling values or enforce cross-cell
+uniqueness and path non-overlap:
+
+```python
+from rapp_sdk import (
+    check_ring_yard_manifest_semantics,
+    read_ring_yard_manifest_schema,
+)
+
+ring_schema_bytes = read_ring_yard_manifest_schema()
+semantic_report = check_ring_yard_manifest_semantics(decoded_manifest)
+verified_manifest = semantic_report.require()
+```
+
+For untrusted JSON bytes, `check_ring_yard_manifest` performs strict parsing
+and all semantic checks directly. The semantic report preserves original
+scalar types, so integer-valued floats, booleans, and negative floating-point
+zero are not canonicalized into integers. `jsonschema` remains a test-only
+dependency.
 
 The default offline test suite includes a checksum-pinned authority fixture
 selected at owner-ratified rev-14. It verifies all 15 frames, the accepted

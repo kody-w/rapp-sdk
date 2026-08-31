@@ -10,6 +10,7 @@ from .errors import (
     CacheIntegrityError,
     ProtocolError,
     RappSDKError,
+    RingManifestError,
     SpecChainError,
     SpecResolutionError,
 )
@@ -31,7 +32,20 @@ from .protocol import (
 )
 from .reports import Diagnostic, DiagnosticStatus, VerificationReport
 from .resolution import RevisionSource, SpecResolver
-from .schemas import SPEC_REVISION_SCHEMA_ID, read_spec_revision_schema
+from .ring_manifest import (
+    RingYardManifest,
+    build_default_ring_yard_manifest,
+    check_ring_yard_manifest,
+    check_ring_yard_manifest_semantics,
+    ports_for_cell,
+    verify_ring_yard_manifest,
+)
+from .schemas import (
+    RING_YARD_MANIFEST_SCHEMA_ID,
+    SPEC_REVISION_SCHEMA_ID,
+    read_ring_yard_manifest_schema,
+    read_spec_revision_schema,
+)
 from .spec_chain import (
     ContentLocator,
     RevisionAddress,
@@ -51,8 +65,11 @@ __all__ = (
     "PersistedHead",
     "ProtocolError",
     "RappSDKError",
+    "RING_YARD_MANIFEST_SCHEMA_ID",
     "RevisionAddress",
     "RevisionSource",
+    "RingManifestError",
+    "RingYardManifest",
     "SPEC_REVISION_SCHEMA_ID",
     "SpecChain",
     "SpecChainError",
@@ -67,15 +84,21 @@ __all__ = (
     "__version__",
     "__version_info__",
     "build_frame_mapping",
+    "build_default_ring_yard_manifest",
     "build_spec_revision_frame",
     "canonicalize",
     "check_frame",
+    "check_ring_yard_manifest",
+    "check_ring_yard_manifest_semantics",
     "check_stream",
+    "ports_for_cell",
+    "read_ring_yard_manifest_schema",
     "read_spec_revision_schema",
     "selected_authority_checkpoint",
     "selected_authority_registry",
     "selected_authority_trust_policy",
     "strict_json_loads",
     "verify_frame",
+    "verify_ring_yard_manifest",
     "verify_stream",
 )
