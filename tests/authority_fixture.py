@@ -9,8 +9,10 @@ from pathlib import Path
 
 from rapp_sdk import (
     KindFamilyRegistry,
-    PersistedHead,
     StreamTrustPolicy,
+    selected_authority_checkpoint,
+    selected_authority_registry,
+    selected_authority_trust_policy,
     strict_json_loads,
 )
 
@@ -118,23 +120,18 @@ def selected_policies(
         or canonicalization["floating_point"] != "refused"
     ):
         raise AssertionError("bootstrap number profile is not recognized")
-    registry = KindFamilyRegistry(
-        {frame_profile["kind"]: "body"},
-        genesis_hashes={
-            authority["stream_id"]: authority["genesis_frame_hash"]
-        },
-        verified=True,
-        registry_id=f"sha256:{SELECTED_BOOTSTRAP_SHA256}",
-    )
-    trust = StreamTrustPolicy(
-        stream_id=authority["stream_id"],
-        trusted_genesis_hash=authority["genesis_frame_hash"],
-        prior_head=PersistedHead(
-            seq=selected["seq"],
-            frame_hash=selected["frame_hash"],
-        ),
-        number_profile="exact-integer",
-    )
+    checkpoint = selected_authority_checkpoint()
+    if (
+        checkpoint.accepted_commit != manifest["authority_merge_commit"]
+        or checkpoint.bootstrap_profile_sha256 != SELECTED_BOOTSTRAP_SHA256
+        or checkpoint.stream_id != authority["stream_id"]
+        or checkpoint.selected_head.seq != selected["seq"]
+        or checkpoint.selected_head.frame_hash != selected["frame_hash"]
+        or checkpoint.kind_families != {frame_profile["kind"]: "body"}
+    ):
+        raise AssertionError("selected checkpoint differs from fixture authority")
+    registry = selected_authority_registry()
+    trust = selected_authority_trust_policy()
     return registry, trust
 
 

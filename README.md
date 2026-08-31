@@ -24,32 +24,16 @@ for strict RAPP/1 frames and append-only specification chains:
 
 ```python
 from rapp_sdk import (
-    KindFamilyRegistry,
     SpecChain,
     SpecResolver,
-    StreamTrustPolicy,
-    build_spec_revision_frame,
+    selected_authority_registry,
+    selected_authority_trust_policy,
 )
 
-first = build_spec_revision_frame(
-    revision="rev-1",
-    text="# RAPP/1\n",
-    utc="2026-08-30T00:00:00.000Z",
-    stream_id="rappid:@example/spec:" + "0" * 64,
-)
-registry = KindFamilyRegistry(
-    {"body.pulse": "body"},
-    genesis_hashes={first["stream_id"]: first["frame_hash"]},
-    verified=True,
-)
-trust = StreamTrustPolicy(
-    stream_id=first["stream_id"],
-    trusted_genesis_hash=first["frame_hash"],
-)
-chain = SpecChain.from_frames(
-    [first],
-    registry=registry,
-    trust_policy=trust,
+chain = SpecChain.from_jsonl(
+    authority_chain_bytes,
+    registry=selected_authority_registry(),
+    trust_policy=selected_authority_trust_policy(),
 )
 normative_bytes = SpecResolver(chain).read(chain.head)
 ```
@@ -65,6 +49,8 @@ checksum-revalidating content-addressed cache. See
 - Protocol: `build_frame_mapping`, `check_frame`, `verify_frame`,
   `check_stream`, `verify_stream`, `KindFamilyRegistry`,
   `StreamTrustPolicy`, `VerifiedFrame`, and `VerifiedStream`
+- Selected authority: `selected_authority_checkpoint`,
+  `selected_authority_registry`, and `selected_authority_trust_policy`
 - Specification chain: `SpecChain`, `SpecRevision`, `RevisionAddress`,
   `build_spec_revision_frame`
 - Resolution: `SpecResolver` and `RevisionSource`
@@ -85,9 +71,11 @@ Run the no-network ergonomics example:
 PYTHONPATH=src python3 examples/spec_chain_smoke.py
 ```
 
-Package smoke, when the standard build frontend is available:
+Mandatory release gates:
 
 ```console
+python3 -m unittest discover -v
+python3 tests/schema_validator_smoke.py
 python3 -m build --no-isolation --outdir .build-artifacts
 python3 tests/distribution_install_smoke.py \
   .build-artifacts/rapp_sdk-0.1.0-py3-none-any.whl \
@@ -107,6 +95,12 @@ RAPP_SDK_SETUPTOOLS_SITE=/path/to/local/site-packages \
 The gate copies only the pinned setuptools components into a temporary backend
 overlay. Its bridge is active only while building the sdist, uses
 `PIP_NO_INDEX=1`, and is removed before the isolated `-I` runtime probe.
+Install validation dependencies with the pinned test extra; they are not
+runtime dependencies:
+
+```console
+python3 -m pip install -e '.[test]'
+```
 
 The versioned payload schema is canonical inside the package:
 

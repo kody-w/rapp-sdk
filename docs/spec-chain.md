@@ -43,6 +43,15 @@ fresh mutable wire dictionary, while `to_json_bytes()` and
 internal consistency without an external trust root. Their result is labeled
 `local-untrusted` and `SpecResolver` refuses to use it as authority.
 
+Trusted registries are not created with a Boolean. `KindFamilyRegistry.local()`
+creates an explicit untrusted registry; `KindFamilyRegistry.from_checkpoint()`
+derives a trusted registry from an authenticated `AuthorityCheckpoint`.
+The package-selected rev-14 checkpoint binds the canonical repository,
+protected ref, accepted merge commit, bootstrap hash, raw chain digest, every
+sequence's frame hash, and the selected head. Its matching registry and policy
+are available through `selected_authority_registry()` and
+`selected_authority_trust_policy()`.
+
 Resolution is deliberately separate and has no default network source:
 
 ```python

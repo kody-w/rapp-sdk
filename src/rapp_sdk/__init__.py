@@ -1,6 +1,11 @@
 """Golden-path RAPP SDK API with no import-time I/O."""
 
 from ._version import VERSION, __version__, __version_info__
+from .authority import (
+    selected_authority_checkpoint,
+    selected_authority_registry,
+    selected_authority_trust_policy,
+)
 from .errors import (
     CacheIntegrityError,
     ProtocolError,
@@ -9,6 +14,7 @@ from .errors import (
     SpecResolutionError,
 )
 from .protocol import (
+    AuthorityCheckpoint,
     PROTOCOL_VERSION,
     KindFamilyRegistry,
     PersistedHead,
@@ -35,6 +41,7 @@ from .spec_chain import (
 )
 
 __all__ = (
+    "AuthorityCheckpoint",
     "CacheIntegrityError",
     "ContentLocator",
     "Diagnostic",
@@ -65,6 +72,9 @@ __all__ = (
     "check_frame",
     "check_stream",
     "read_spec_revision_schema",
+    "selected_authority_checkpoint",
+    "selected_authority_registry",
+    "selected_authority_trust_policy",
     "strict_json_loads",
     "verify_frame",
     "verify_stream",

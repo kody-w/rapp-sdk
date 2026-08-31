@@ -22,6 +22,7 @@ from rapp_sdk.diagnostic_codes import (
     DIAGNOSTIC_CODES,
 )
 from rapp_sdk import (
+    AuthorityCheckpoint,
     CacheIntegrityError,
     ContentLocator,
     Diagnostic,
@@ -46,6 +47,9 @@ from rapp_sdk import (
     check_frame,
     check_stream,
     read_spec_revision_schema,
+    selected_authority_checkpoint,
+    selected_authority_registry,
+    selected_authority_trust_policy,
     strict_json_loads,
     verify_frame,
     verify_stream,
@@ -54,6 +58,7 @@ from rapp_sdk import (
 ROOT = Path(__file__).resolve().parents[1]
 RID = "rappid:@example/public-api:" + "0" * 64
 ROOT_EXPORTS = (
+    "AuthorityCheckpoint",
     "CacheIntegrityError",
     "ContentLocator",
     "Diagnostic",
@@ -84,6 +89,9 @@ ROOT_EXPORTS = (
     "check_frame",
     "check_stream",
     "read_spec_revision_schema",
+    "selected_authority_checkpoint",
+    "selected_authority_registry",
+    "selected_authority_trust_policy",
     "strict_json_loads",
     "verify_frame",
     "verify_stream",
@@ -97,15 +105,12 @@ def inline_chain() -> tuple[SpecChain, KindFamilyRegistry, StreamTrustPolicy]:
         utc="2026-08-30T00:00:00.000Z",
         stream_id=RID,
     )
-    registry = KindFamilyRegistry(
-        {"body.pulse": "body"},
-        genesis_hashes={RID: first["frame_hash"]},
-        verified=True,
+    first_checkpoint = AuthorityCheckpoint.from_authenticated(
+        checkpoint_document(first),
+        authenticator=lambda evidence: True,
     )
-    trust = StreamTrustPolicy(
-        stream_id=RID,
-        trusted_genesis_hash=first["frame_hash"],
-    )
+    registry = KindFamilyRegistry.from_checkpoint(first_checkpoint)
+    trust = StreamTrustPolicy.from_checkpoint(first_checkpoint)
     first_chain = SpecChain.from_frames(
         [first],
         registry=registry,
@@ -117,6 +122,12 @@ def inline_chain() -> tuple[SpecChain, KindFamilyRegistry, StreamTrustPolicy]:
         utc="2026-08-30T00:00:01.000Z",
         head=first_chain.head.frame,
     )
+    checkpoint = AuthorityCheckpoint.from_authenticated(
+        checkpoint_document(first, second),
+        authenticator=lambda evidence: True,
+    )
+    registry = KindFamilyRegistry.from_checkpoint(checkpoint)
+    trust = StreamTrustPolicy.from_checkpoint(checkpoint)
     return (
         SpecChain.from_frames(
             [first, second],
@@ -126,6 +137,29 @@ def inline_chain() -> tuple[SpecChain, KindFamilyRegistry, StreamTrustPolicy]:
         registry,
         trust,
     )
+
+
+def checkpoint_document(*frames: dict) -> dict:
+    selected = frames[-1]
+    return {
+        "canonical_repository": "https://example.test/authority",
+        "protected_ref": "refs/heads/main",
+        "accepted_commit": "a" * 40,
+        "bootstrap_profile_sha256": "b" * 64,
+        "chain_sha256": hashlib.sha256(
+            b"".join(canonicalize(frame) + b"\n" for frame in frames)
+        ).hexdigest(),
+        "stream_id": RID,
+        "genesis_frame_hash": frames[0]["frame_hash"],
+        "selected_head": {
+            "seq": selected["seq"],
+            "frame_hash": selected["frame_hash"],
+            "payload_hash": selected["payload_hash"],
+        },
+        "frame_hashes": [frame["frame_hash"] for frame in frames],
+        "kind_families": {"body.pulse": "body"},
+        "number_profile": "rfc8785-binary64",
+    }
 
 
 class PublicAPITests(unittest.TestCase):
@@ -154,17 +188,20 @@ class PublicAPITests(unittest.TestCase):
 
     def test_diagnostic_code_catalog_is_stable(self) -> None:
         self.assertEqual(DIAGNOSTIC_CATALOG_VERSION, "1")
-        self.assertEqual(len(DIAGNOSTIC_CODES), 100)
+        self.assertEqual(len(DIAGNOSTIC_CODES), 104)
         self.assertEqual(DIAGNOSTIC_CODES, tuple(sorted(DIAGNOSTIC_CODES)))
         self.assertEqual(
             hashlib.sha256(
                 ("\n".join(DIAGNOSTIC_CODES) + "\n").encode()
             ).hexdigest(),
-            "ee73afb983fe75ee0b4e9617e23f76e339a7a48b84768d7e78dc0e7463a269e7",
+            "8284b2963f36facccaa82251293cf141c498c261f6230113ee7ade4771c27411",
         )
 
     def test_golden_callables_are_fully_annotated(self) -> None:
         callables = (
+            AuthorityCheckpoint.from_authenticated,
+            KindFamilyRegistry.local,
+            KindFamilyRegistry.from_checkpoint,
             canonicalize,
             strict_json_loads,
             build_frame_mapping,
@@ -174,6 +211,9 @@ class PublicAPITests(unittest.TestCase):
             verify_stream,
             build_spec_revision_frame,
             read_spec_revision_schema,
+            selected_authority_checkpoint,
+            selected_authority_registry,
+            selected_authority_trust_policy,
             SpecChain.from_frames,
             SpecChain.from_frames_local,
             SpecChain.from_jsonl,
@@ -200,18 +240,28 @@ class PublicAPITests(unittest.TestCase):
 
     def test_golden_signatures_and_defaults_are_stable(self) -> None:
         snapshots = {
-            KindFamilyRegistry: (
+            AuthorityCheckpoint.from_authenticated: (
+                "(document: 'Mapping[str, JsonValue]', *, "
+                "authenticator: 'Callable[[bytes], bool]') -> "
+                "'AuthorityCheckpoint'"
+            ),
+            KindFamilyRegistry.local: (
                 "(kind_families: 'Mapping[str, str]', "
-                "genesis_hashes: 'Mapping[str, str]' = <factory>, "
-                "verified: 'bool' = False, "
-                "registry_id: 'str | None' = None) -> None"
+                "*, genesis_hashes: 'Mapping[str, str] | None' = None, "
+                "registry_id: 'str | None' = None) -> "
+                "'KindFamilyRegistry'"
+            ),
+            KindFamilyRegistry.from_checkpoint: (
+                "(checkpoint: 'AuthorityCheckpoint') -> "
+                "'KindFamilyRegistry'"
             ),
             StreamTrustPolicy: (
                 "(stream_id: 'str', trusted_genesis_hash: 'str', "
                 "prior_head: 'PersistedHead | None' = None, "
                 "approved_re_genesis_hashes: 'frozenset[str]' = "
                 "frozenset(), number_profile: 'str' = "
-                "'rfc8785-binary64') -> None"
+                "'rfc8785-binary64', checkpoint: "
+                "'AuthorityCheckpoint | None' = None) -> None"
             ),
             build_frame_mapping: (
                 "(kind: 'str', stream_id: 'str', seq: 'int', utc: 'str', "
@@ -271,11 +321,26 @@ class PublicAPITests(unittest.TestCase):
                 "context",
                 "remediation",
             ),
+            AuthorityCheckpoint: (
+                "canonical_repository",
+                "protected_ref",
+                "accepted_commit",
+                "bootstrap_profile_sha256",
+                "chain_sha256",
+                "stream_id",
+                "genesis_frame_hash",
+                "selected_head",
+                "selected_payload_hash",
+                "frame_hashes",
+                "kind_families",
+                "number_profile",
+                "evidence_id",
+            ),
             KindFamilyRegistry: (
                 "kind_families",
                 "genesis_hashes",
-                "verified",
                 "registry_id",
+                "checkpoint",
             ),
             PersistedHead: ("seq", "frame_hash"),
             StreamTrustPolicy: (
@@ -284,6 +349,7 @@ class PublicAPITests(unittest.TestCase):
                 "prior_head",
                 "approved_re_genesis_hashes",
                 "number_profile",
+                "checkpoint",
             ),
             VerifiedFrame: (
                 "spec",
@@ -298,6 +364,7 @@ class PublicAPITests(unittest.TestCase):
                 "prev",
                 "prev_wave",
                 "sig",
+                "_number_origins",
                 "_canonical_bytes",
             ),
             VerifiedStream: (
@@ -322,7 +389,6 @@ class PublicAPITests(unittest.TestCase):
                 "locator",
                 "is_inline",
                 "frame",
-                "_inline_bytes",
             ),
         }
         for model, expected in snapshots.items():
@@ -343,11 +409,45 @@ class PublicAPITests(unittest.TestCase):
         self.assertEqual(read_spec_revision_schema(), source_bytes)
         self.assertEqual(
             hashlib.sha256(source_bytes).hexdigest(),
-            "939283dc97c0f0da5201b557314d6da35ac0805ec62f946877eb1a0d36080f24",
+            "d7ca036110105aababf20730febc49810533942e19ab0ef1f6bb4563f3ba9222",
         )
         self.assertEqual(
             json.loads(source_bytes)["$id"],
             SPEC_REVISION_SCHEMA_ID,
+        )
+
+    def test_selected_authority_is_checkpoint_derived(self) -> None:
+        resource = files("rapp_sdk").joinpath(
+            "authority/selected-rev14.json"
+        )
+        self.assertTrue(resource.is_file())
+        checkpoint = selected_authority_checkpoint()
+        registry = selected_authority_registry()
+        trust = selected_authority_trust_policy()
+        self.assertEqual(
+            checkpoint.accepted_commit,
+            "caf6ef276cafa92aa744499af90dc1a28559941a",
+        )
+        self.assertEqual(
+            checkpoint.canonical_repository,
+            "https://github.com/kody-w/rapp-1",
+        )
+        self.assertEqual(checkpoint.protected_ref, "refs/heads/main")
+        self.assertEqual(
+            checkpoint.bootstrap_profile_sha256,
+            "1666e44acf532f854d4bf74868c9af9f9b362055692189ac858a7c8b52dcd5bb",
+        )
+        self.assertIs(registry.checkpoint, checkpoint)
+        self.assertIs(trust.checkpoint, checkpoint)
+        self.assertTrue(registry.verified)
+        self.assertEqual(len(checkpoint.frame_hashes), 15)
+        with self.assertRaises(TypeError):
+            KindFamilyRegistry(
+                {"body.pulse": "body"},
+                verified=True,
+            )
+        self.assertFalse(
+            KindFamilyRegistry.local({"body.pulse": "body"}).verified
         )
 
     def test_report_diagnostic_and_exception_are_one_model(self) -> None:
@@ -357,10 +457,11 @@ class PublicAPITests(unittest.TestCase):
             utc="2026-08-30T00:00:00.000Z",
             stream_id=RID,
         )
-        registry = KindFamilyRegistry(
-            {"body.pulse": "body"},
-            genesis_hashes={RID: first["frame_hash"]},
-            verified=True,
+        registry = KindFamilyRegistry.from_checkpoint(
+            AuthorityCheckpoint.from_authenticated(
+                checkpoint_document(first),
+                authenticator=lambda evidence: True,
+            )
         )
         first["payload"]["normative"]["text"] = "mutated"
         report = check_frame(first, registry=registry)

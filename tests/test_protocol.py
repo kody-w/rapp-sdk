@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import base64
 import copy
+import dataclasses
+import hashlib
 import math
 import unittest
 
 from rapp_sdk import (
+    AuthorityCheckpoint,
     DiagnosticStatus,
     KindFamilyRegistry,
     PersistedHead,
@@ -36,21 +39,11 @@ UTC2 = "2026-08-30T00:00:02.000Z"
 
 
 def registry(
-    genesis_hash: str,
+    first: dict,
     *,
     kinds: dict[str, str] | None = None,
 ) -> KindFamilyRegistry:
-    return KindFamilyRegistry(
-        kinds
-        or {
-            "body.pulse": "body",
-            "body.re-genesis": "body",
-            "memory.chat-turn": "memory",
-            "swarm.echo": "swarm",
-        },
-        genesis_hashes={RID: genesis_hash},
-        verified=True,
-    )
+    return authority(first, kinds=kinds)[0]
 
 
 def genesis(payload: dict | None = None) -> dict:
@@ -76,11 +69,58 @@ def successor(head: dict, payload: dict, *, utc: str = UTC1) -> dict:
 
 
 def trust(first: dict, prior: PersistedHead | None = None) -> StreamTrustPolicy:
-    return StreamTrustPolicy(
-        stream_id=RID,
-        trusted_genesis_hash=first["frame_hash"],
-        prior_head=prior,
+    policy = authority(first)[1]
+    return (
+        dataclasses.replace(policy, prior_head=prior)
+        if prior is not None
+        else policy
     )
+
+
+def authority(
+    *frames: dict,
+    kinds: dict[str, str] | None = None,
+    number_profile: str = "rfc8785-binary64",
+) -> tuple[KindFamilyRegistry, StreamTrustPolicy]:
+    selected = frames[-1]
+    document = {
+        "canonical_repository": "https://example.test/authority",
+        "protected_ref": "refs/heads/main",
+        "accepted_commit": "a" * 40,
+        "bootstrap_profile_sha256": "b" * 64,
+        "chain_sha256": hashlib.sha256(jsonl(*frames)).hexdigest(),
+        "stream_id": frames[0]["stream_id"],
+        "genesis_frame_hash": frames[0]["frame_hash"],
+        "selected_head": {
+            "seq": selected["seq"],
+            "frame_hash": selected["frame_hash"],
+            "payload_hash": selected["payload_hash"],
+        },
+        "frame_hashes": [frame["frame_hash"] for frame in frames],
+        "kind_families": (
+            {
+            "body.pulse": "body",
+            "body.re-genesis": "body",
+            "memory.chat-turn": "memory",
+            "swarm.echo": "swarm",
+            }
+            if kinds is None
+            else kinds
+        ),
+        "number_profile": number_profile,
+    }
+    checkpoint = AuthorityCheckpoint.from_authenticated(
+        document,
+        authenticator=lambda evidence: True,
+    )
+    return (
+        KindFamilyRegistry.from_checkpoint(checkpoint),
+        StreamTrustPolicy.from_checkpoint(checkpoint),
+    )
+
+
+def jsonl(*frames: dict) -> bytes:
+    return b"".join(canonicalize(frame) + b"\n" for frame in frames)
 
 
 def jws() -> str:
@@ -186,7 +226,7 @@ class CanonicalizationTests(unittest.TestCase):
 class VerificationTests(unittest.TestCase):
     def test_verified_frame_and_stream_are_immutable(self) -> None:
         first = genesis({"nested": {"items": [1, 0.1]}})
-        policy = registry(first["frame_hash"])
+        policy = registry(first)
         verified = verify_frame(first, registry=policy)
         self.assertIsInstance(verified, VerifiedFrame)
         with self.assertRaises(TypeError):
@@ -210,10 +250,9 @@ class VerificationTests(unittest.TestCase):
         first = genesis()
         unverified = check_frame(
             first,
-            registry=KindFamilyRegistry(
+            registry=KindFamilyRegistry.local(
                 {"body.pulse": "body"},
                 genesis_hashes={RID: first["frame_hash"]},
-                verified=False,
             ),
         )
         self.assertEqual(
@@ -222,11 +261,7 @@ class VerificationTests(unittest.TestCase):
         )
         unknown = check_frame(
             first,
-            registry=KindFamilyRegistry(
-                {},
-                genesis_hashes={RID: first["frame_hash"]},
-                verified=True,
-            ),
+            registry=registry(first, kinds={}),
         )
         self.assertFalse(unknown.ok)
         self.assertEqual(unknown.diagnostics[-1].code, "unregistered-kind")
@@ -243,7 +278,7 @@ class VerificationTests(unittest.TestCase):
         mismatch = check_frame(
             wrong_family,
             registry=registry(
-                first["frame_hash"],
+                first,
                 kinds={"swarm.echo": "swarm"},
             ),
         )
@@ -254,7 +289,7 @@ class VerificationTests(unittest.TestCase):
         first = genesis({"binary64_integer": 9007199254740992})
         verified = verify_frame(
             first,
-            registry=registry(first["frame_hash"]),
+            registry=registry(first),
         )
         self.assertEqual(
             verified.to_dict()["payload"]["binary64_integer"],
@@ -270,7 +305,7 @@ class VerificationTests(unittest.TestCase):
         )
         report = check_frame(
             invalid_seq,
-            registry=registry(first["frame_hash"]),
+            registry=registry(first),
         )
         self.assertEqual(report.diagnostics[-1].code, "invalid-seq")
         self.assertEqual(report.diagnostics[-1].protocol_step, "1")
@@ -296,7 +331,7 @@ class VerificationTests(unittest.TestCase):
             with self.subTest(code=code):
                 report = check_stream(
                     [first, malformed],
-                    registry=registry(first["frame_hash"]),
+                    registry=registry(first),
                     trust_policy=trust(first),
                 )
                 self.assertFalse(report.ok)
@@ -305,7 +340,7 @@ class VerificationTests(unittest.TestCase):
 
     def test_particle_wave_and_previous_link_fail_in_protocol_order(self) -> None:
         first = genesis({"value": "first"})
-        policy = registry(first["frame_hash"])
+        policy = registry(first)
         verified_first = verify_frame(first, registry=policy)
 
         particle = copy.deepcopy(first)
@@ -339,19 +374,39 @@ class VerificationTests(unittest.TestCase):
         )
         self.assertEqual(previous.diagnostics[-1].protocol_step, "4")
 
+    def test_genuine_fork_returns_report_and_protocol_error(self) -> None:
+        first = genesis()
+        left = successor(first, {"branch": "left"})
+        right = successor(first, {"branch": "right"})
+        policy, trusted = authority(first, left)
+        report = check_stream(
+            [first, left, right],
+            registry=policy,
+            trust_policy=trusted,
+        )
+        self.assertFalse(report.ok)
+        self.assertEqual(report.diagnostics[-1].code, "fork-detected")
+        with self.assertRaises(ProtocolError) as raised:
+            verify_stream(
+                [first, left, right],
+                registry=policy,
+                trust_policy=trusted,
+            )
+        self.assertEqual(raised.exception.code, "fork-detected")
+
     def test_replacement_genesis_stale_prefix_and_known_conflict_are_refused(
         self,
     ) -> None:
         first = genesis()
         second = successor(first, {"branch": "trusted"})
-        policy = registry(first["frame_hash"])
+        policy, trusted = authority(first, second)
         prior = PersistedHead(seq=1, frame_hash=second["frame_hash"])
 
         replacement = genesis({"replacement": True})
         replaced = check_stream(
             [replacement],
             registry=policy,
-            trust_policy=trust(first),
+            trust_policy=trusted,
         )
         self.assertEqual(
             replaced.diagnostics[-1].code,
@@ -361,7 +416,7 @@ class VerificationTests(unittest.TestCase):
         stale = check_stream(
             [first],
             registry=policy,
-            trust_policy=trust(first, prior),
+            trust_policy=dataclasses.replace(trusted, prior_head=prior),
         )
         self.assertEqual(stale.diagnostics[-1].code, "head-rollback")
 
@@ -369,7 +424,7 @@ class VerificationTests(unittest.TestCase):
         conflict = check_stream(
             [first, competing],
             registry=policy,
-            trust_policy=trust(first, prior),
+            trust_policy=dataclasses.replace(trusted, prior_head=prior),
         )
         self.assertEqual(conflict.diagnostics[-1].code, "known-head-conflict")
 
@@ -389,18 +444,14 @@ class VerificationTests(unittest.TestCase):
             None,
             sig=jws(),
         )
-        policy = KindFamilyRegistry(
-            {"body.re-genesis": "body"},
-            genesis_hashes={RID: reset["frame_hash"]},
-            verified=True,
+        policy, reset_trust = authority(
+            reset,
+            kinds={"body.re-genesis": "body"},
         )
         unapproved = check_stream(
             [reset],
             registry=policy,
-            trust_policy=StreamTrustPolicy(
-                stream_id=RID,
-                trusted_genesis_hash=reset["frame_hash"],
-            ),
+            trust_policy=reset_trust,
             signature_verifier=lambda frame: True,
         )
         self.assertEqual(
@@ -411,9 +462,8 @@ class VerificationTests(unittest.TestCase):
         approved = verify_stream(
             [reset],
             registry=policy,
-            trust_policy=StreamTrustPolicy(
-                stream_id=RID,
-                trusted_genesis_hash=reset["frame_hash"],
+            trust_policy=dataclasses.replace(
+                reset_trust,
                 approved_re_genesis_hashes=frozenset({reset["frame_hash"]}),
             ),
             signature_verifier=lambda frame: True,
@@ -422,27 +472,62 @@ class VerificationTests(unittest.TestCase):
 
     def test_trust_policy_can_apply_bootstrap_exact_integer_profile(self) -> None:
         first = genesis({"binary64": 0.1})
-        policy = registry(first["frame_hash"])
+        policy, binary64_trust = authority(first)
         self.assertTrue(
             verify_stream(
                 [first],
                 registry=policy,
-                trust_policy=trust(first),
+                trust_policy=binary64_trust,
             ).trusted
+        )
+        exact_registry, exact_trust = authority(
+            first,
+            number_profile="exact-integer",
         )
         exact_integer = check_stream(
             [first],
-            registry=policy,
-            trust_policy=StreamTrustPolicy(
-                stream_id=RID,
-                trusted_genesis_hash=first["frame_hash"],
-                number_profile="exact-integer",
-            ),
+            registry=exact_registry,
+            trust_policy=exact_trust,
         )
         self.assertEqual(
             exact_integer.diagnostics[-1].code,
             "trust-number-profile-mismatch",
         )
+        for token, value in (
+            (b"1.0", 1),
+            (b"1e0", 1),
+            (b"1e3", 1000),
+            (b"10e2", 1000),
+        ):
+            with self.subTest(token=token):
+                raw_frame = genesis({"value": value})
+                raw = canonicalize(raw_frame).replace(
+                    b'"value":' + canonicalize(value),
+                    b'"value":' + token,
+                    1,
+                )
+                parsed = strict_json_loads(raw)
+                general_registry, general_trust = authority(parsed)
+                self.assertTrue(
+                    verify_stream(
+                        [parsed],
+                        registry=general_registry,
+                        trust_policy=general_trust,
+                    ).trusted
+                )
+                token_registry, token_trust = authority(
+                    parsed,
+                    number_profile="exact-integer",
+                )
+                exact = check_stream(
+                    [parsed],
+                    registry=token_registry,
+                    trust_policy=token_trust,
+                )
+                self.assertEqual(
+                    exact.diagnostics[-1].code,
+                    "trust-number-profile-mismatch",
+                )
 
     def test_infinite_iterator_and_zero_time_are_bounded(self) -> None:
         first = genesis()
@@ -464,7 +549,10 @@ class VerificationTests(unittest.TestCase):
 
         bounded = check_stream_local(
             frames(),
-            registry=registry(first["frame_hash"]),
+            registry=KindFamilyRegistry.local(
+                {"body.pulse": "body"},
+                genesis_hashes={RID: first["frame_hash"]},
+            ),
             max_frames=8,
             max_seconds=1,
         )
@@ -474,7 +562,7 @@ class VerificationTests(unittest.TestCase):
 
         timed = check_stream(
             [first],
-            registry=registry(first["frame_hash"]),
+            registry=registry(first),
             trust_policy=trust(first),
             max_seconds=0,
         )
@@ -489,7 +577,7 @@ class VerificationTests(unittest.TestCase):
         corrupt["payload"]["changed"] = True
         report = check_frame(
             corrupt,
-            registry=registry(first["frame_hash"]),
+            registry=registry(first),
         )
         self.assertFalse(report.ok)
         self.assertEqual(report.diagnostics[-1].status, DiagnosticStatus.ERROR)
@@ -503,7 +591,10 @@ class VerificationTests(unittest.TestCase):
 
         report = check_stream_local(
             [first],
-            registry=registry(first["frame_hash"]),
+            registry=KindFamilyRegistry.local(
+                {"body.pulse": "body"},
+                genesis_hashes={RID: first["frame_hash"]},
+            ),
         )
         self.assertTrue(report.ok)
         self.assertFalse(report.trusted)

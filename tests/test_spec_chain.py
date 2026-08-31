@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import hashlib
 import json
 import re
@@ -10,17 +11,20 @@ from pathlib import Path
 from unittest import mock
 
 from rapp_sdk import (
+    AuthorityCheckpoint,
     ContentLocator,
     KindFamilyRegistry,
     SpecChain,
     SpecChainError,
     SpecResolver,
     SpecResolutionError,
+    SpecRevision,
     StreamTrustPolicy,
     build_frame_mapping,
     build_spec_revision_frame,
     canonicalize,
     read_spec_revision_schema,
+    strict_json_loads,
 )
 from rapp_sdk.protocol import H, PARTICLE_SPACE, WAVE_SPACE
 from rapp_sdk.resolution import (
@@ -86,21 +90,43 @@ def pointer_frame(
     )
 
 
-def policies(first: dict) -> tuple[KindFamilyRegistry, StreamTrustPolicy]:
-    registry = KindFamilyRegistry(
+def policies(*frames: dict) -> tuple[KindFamilyRegistry, StreamTrustPolicy]:
+    selected = frames[-1]
+    checkpoint = AuthorityCheckpoint.from_authenticated(
+        {
+            "canonical_repository": "https://example.test/authority",
+            "protected_ref": "refs/heads/main",
+            "accepted_commit": "a" * 40,
+            "bootstrap_profile_sha256": "b" * 64,
+            "chain_sha256": hashlib.sha256(jsonl(*frames)).hexdigest(),
+            "stream_id": frames[0]["stream_id"],
+            "genesis_frame_hash": frames[0]["frame_hash"],
+            "selected_head": {
+                "seq": selected["seq"],
+                "frame_hash": selected["frame_hash"],
+                "payload_hash": selected["payload_hash"],
+            },
+            "frame_hashes": [frame["frame_hash"] for frame in frames],
+            "kind_families": {"body.pulse": "body"},
+            "number_profile": "rfc8785-binary64",
+        },
+        authenticator=lambda evidence: True,
+    )
+    return (
+        KindFamilyRegistry.from_checkpoint(checkpoint),
+        StreamTrustPolicy.from_checkpoint(checkpoint),
+    )
+
+
+def local_registry(first: dict) -> KindFamilyRegistry:
+    return KindFamilyRegistry.local(
         {"body.pulse": "body"},
         genesis_hashes={first["stream_id"]: first["frame_hash"]},
-        verified=True,
     )
-    trust = StreamTrustPolicy(
-        stream_id=first["stream_id"],
-        trusted_genesis_hash=first["frame_hash"],
-    )
-    return registry, trust
 
 
 def trusted_chain(*frames: dict) -> SpecChain:
-    registry, trust = policies(frames[0])
+    registry, trust = policies(*frames)
     return SpecChain.from_frames(
         frames,
         registry=registry,
@@ -175,12 +201,62 @@ class SpecChainTests(unittest.TestCase):
             raised.exception.diagnostic.remediation,
         )
 
-        registry, _ = policies(pointer)
-        local = SpecChain.from_frames_local([pointer], registry=registry)
+        local = SpecChain.from_frames_local(
+            [pointer],
+            registry=local_registry(pointer),
+        )
         self.assertFalse(local.trusted)
         with self.assertRaises(SpecResolutionError) as untrusted:
             SpecResolver(local).read(local.head)
         self.assertEqual(untrusted.exception.code, "untrusted-chain")
+
+    def test_revision_forgery_cannot_replace_internal_content(self) -> None:
+        inline = build_spec_revision_frame(
+            revision="rev-inline",
+            text="trusted",
+            utc=UTC0,
+            stream_id=RID,
+        )
+        inline_chain = trusted_chain(inline)
+        with self.assertRaises((TypeError, ValueError)):
+            dataclasses.replace(
+                inline_chain.head,
+                _inline_bytes=b"EVIL",
+            )
+
+        forged = object.__new__(SpecRevision)
+        for name, value in (
+            ("address", inline_chain.head.address),
+            ("stream_id", RID),
+            ("normative_sha256", "0" * 64),
+            ("normative_bytes", 4),
+            ("media_type", "text/plain"),
+            ("locator", None),
+            ("is_inline", True),
+            ("frame", None),
+        ):
+            object.__setattr__(forged, name, value)
+        self.assertEqual(
+            SpecResolver(inline_chain).read(forged),
+            b"trusted",
+        )
+
+        pointer_chain = trusted_chain(pointer_frame())
+        pointer_forgery = object.__new__(SpecRevision)
+        for name, value in (
+            ("address", pointer_chain.head.address),
+            ("stream_id", RID),
+            ("normative_sha256", hashlib.sha256(b"EVIL").hexdigest()),
+            ("normative_bytes", 4),
+            ("media_type", "text/plain"),
+            ("locator", None),
+            ("is_inline", True),
+            ("frame", None),
+        ):
+            object.__setattr__(pointer_forgery, name, value)
+        with self.assertRaises(SpecResolutionError) as source_required:
+            SpecResolver(pointer_chain).read(pointer_forgery)
+        self.assertEqual(source_required.exception.code, "source-required")
 
     def test_selector_api_is_keyword_only_and_labels_are_explicit(self) -> None:
         content = b"stable"
@@ -240,7 +316,11 @@ class SpecChainTests(unittest.TestCase):
         string_size_schema = next(
             entry for entry in legacy_types if entry["type"] == "string"
         )
-        self.assertEqual(string_size_schema["x-rapp-maximum"], 1048576)
+        size_pattern = re.compile(string_size_schema["pattern"])
+        for accepted in ("0", "1", "999999", "1000000", "1048576"):
+            self.assertIsNotNone(size_pattern.fullmatch(accepted))
+        for rejected in ("00", "1048577", "9999999", "-1"):
+            self.assertIsNone(size_pattern.fullmatch(rejected))
 
         for integer_size in (False, True):
             with self.subTest(integer_size=integer_size):
@@ -290,10 +370,26 @@ class SpecChainTests(unittest.TestCase):
                     repository="HTTPS://example.com/specification"
                 )
             )
+        for unsafe_repository in (
+            "https://user@example.com/specification",
+            "https://example.com:444/specification",
+            "https://example.com/specification?ref=main",
+            "https://example.com/specification#main",
+            "https://example.com",
+            "https://example.com//specification",
+        ):
+            with self.subTest(repository=unsafe_repository):
+                self.assertIsNone(
+                    repository_pattern.fullmatch(unsafe_repository)
+                )
+                with self.assertRaises(SpecChainError):
+                    trusted_chain(
+                        pointer_frame(repository=unsafe_repository)
+                    )
 
     def test_jsonl_scanning_is_deadline_and_memory_bounded(self) -> None:
         first = pointer_frame()
-        registry, _ = policies(first)
+        registry = local_registry(first)
         with self.assertRaises(SpecChainError) as timed:
             SpecChain.from_jsonl_local(
                 jsonl(first),
@@ -465,7 +561,7 @@ class SelectedAuthorityCompatibilityTests(unittest.TestCase):
         )
         self.assertEqual(
             registry.registry_id,
-            f"sha256:{SELECTED_BOOTSTRAP_SHA256}",
+            registry.checkpoint.evidence_id,
         )
         self.assertEqual(trust.prior_head.seq, 14)
         self.assertEqual(trust.prior_head.frame_hash, SELECTED_FRAME_HASH)
@@ -494,7 +590,33 @@ class SelectedAuthorityCompatibilityTests(unittest.TestCase):
                 registry=registry,
                 trust_policy=trust,
             )
-        self.assertEqual(stale.exception.code, "head-rollback")
+        self.assertEqual(
+            stale.exception.code,
+            "authority-snapshot-mismatch",
+        )
+
+    def test_checkpoint_rejects_mutated_history_with_same_rev14_head(self) -> None:
+        manifest, chain_bytes, _, _, bootstrap = selected_fixture()
+        registry, trust = selected_policies(manifest, bootstrap)
+        frames = [
+            strict_json_loads(line)
+            for line in chain_bytes.splitlines()
+        ]
+        frames[12]["payload"]["checkpoint_attack"] = True
+        rehash(frames[12])
+        frames[13]["prev"] = frames[12]["payload_hash"]
+        rehash(frames[13])
+        self.assertEqual(frames[14]["frame_hash"], SELECTED_FRAME_HASH)
+        with self.assertRaises(SpecChainError) as mismatch:
+            SpecChain.from_frames(
+                frames,
+                registry=registry,
+                trust_policy=trust,
+            )
+        self.assertEqual(
+            mismatch.exception.code,
+            "authority-snapshot-mismatch",
+        )
 
 
 if __name__ == "__main__":

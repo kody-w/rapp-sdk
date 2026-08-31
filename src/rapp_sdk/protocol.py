@@ -96,6 +96,20 @@ FrozenJsonValue: TypeAlias = (
 SignatureVerifier = Callable[[FrameMapping], bool | tuple[bool, str]]
 
 
+class _ParsedInteger(int):
+    def __new__(cls, value: int, token: str) -> _ParsedInteger:
+        instance = int.__new__(cls, value)
+        instance.token = token
+        return instance
+
+
+class _ParsedFloat(float):
+    def __new__(cls, value: float, token: str) -> _ParsedFloat:
+        instance = float.__new__(cls, value)
+        instance.token = token
+        return instance
+
+
 def _diagnostic(
     code: str,
     message: str,
@@ -255,9 +269,25 @@ def _prepare_json(value: JsonValue, depth: int = 1) -> JsonValue:
         )
     if value is None or type(value) is bool:
         return value
+    if isinstance(value, _ParsedInteger):
+        integer = int(value)
+        binary64 = _validate_number_token(value.token)
+        return (
+            integer
+            if -MAX_SAFE_INTEGER <= integer <= MAX_SAFE_INTEGER
+            else binary64
+        )
     if type(value) is int:
         binary64 = _validate_number_token(str(value))
         return value if -MAX_SAFE_INTEGER <= value <= MAX_SAFE_INTEGER else binary64
+    if isinstance(value, _ParsedFloat):
+        if not math.isfinite(value):
+            _raise(
+                "number-not-finite",
+                "non-finite numbers are forbidden",
+                operation="canonicalize",
+            )
+        return float(value)
     if type(value) is float:
         if not math.isfinite(value):
             _raise(
@@ -389,11 +419,11 @@ def _object_from_pairs(
 
 def _parse_integer(token: str) -> int:
     _validate_number_token(token)
-    return int(token)
+    return _ParsedInteger(int(token), token)
 
 
 def _parse_float(token: str) -> float:
-    return _validate_number_token(token)
+    return _ParsedFloat(_validate_number_token(token), token)
 
 
 def _reject_constant(token: str) -> None:
@@ -765,7 +795,7 @@ def _validate_regenesis_shape(frame: Frame) -> None:
     _stream_family(migrated["stream_id"])
     _validate_hash(migrated["terminal_seal"], field_name="terminal_seal")
     if (
-        type(migrated["terminal_seq"]) is not int
+        type(migrated["terminal_seq"]) not in (int, _ParsedInteger)
         or not 0 <= migrated["terminal_seq"] <= MAX_SAFE_INTEGER
     ):
         _raise(
@@ -793,6 +823,10 @@ def _require_nfc_payload_keys(value: JsonValue) -> None:
 
 
 def _freeze_json(value: JsonValue) -> FrozenJsonValue:
+    if isinstance(value, _ParsedInteger):
+        return int(value)
+    if isinstance(value, _ParsedFloat):
+        return float(value)
     if type(value) is dict:
         return MappingProxyType(
             {key: _freeze_json(item) for key, item in value.items()}
@@ -803,39 +837,41 @@ def _freeze_json(value: JsonValue) -> FrozenJsonValue:
 
 
 @dataclass(frozen=True, slots=True)
-class KindFamilyRegistry:
-    """Caller-authenticated kind families and current genesis bindings."""
+class NumberOrigin:
+    """Original payload number kind and token, retained across canonicalization."""
 
-    kind_families: Mapping[str, str]
-    genesis_hashes: Mapping[str, str] = field(default_factory=dict)
-    verified: bool = False
-    registry_id: str | None = None
+    location: str
+    kind: str
+    value: int | float
+    token: str | None
 
-    def __post_init__(self) -> None:
-        if type(self.verified) is not bool:
-            raise TypeError("verified must be bool")
-        if self.registry_id is not None and type(self.registry_id) is not str:
-            raise TypeError("registry_id must be text or None")
-        kinds = dict(self.kind_families)
-        genesis = dict(self.genesis_hashes)
-        if any(
-            type(kind) is not str or family not in {"body", "memory", "swarm"}
-            for kind, family in kinds.items()
-        ):
-            raise ValueError("kind_families contains an invalid binding")
-        for stream_id, frame_hash in genesis.items():
-            _stream_family(stream_id)
-            _validate_hash(frame_hash, field_name="genesis_hash")
-        object.__setattr__(
-            self,
-            "kind_families",
-            MappingProxyType(dict(sorted(kinds.items()))),
-        )
-        object.__setattr__(
-            self,
-            "genesis_hashes",
-            MappingProxyType(dict(sorted(genesis.items()))),
-        )
+
+def _number_origins(
+    value: JsonValue,
+    *,
+    location: str = "payload",
+) -> tuple[NumberOrigin, ...]:
+    origins: list[NumberOrigin] = []
+
+    def visit(item: JsonValue, path: str) -> None:
+        if isinstance(item, _ParsedInteger):
+            origins.append(NumberOrigin(path, "integer", int(item), item.token))
+        elif isinstance(item, _ParsedFloat):
+            origins.append(NumberOrigin(path, "float", float(item), item.token))
+        elif type(item) is int:
+            origins.append(NumberOrigin(path, "integer", item, None))
+        elif type(item) is float:
+            origins.append(NumberOrigin(path, "float", item, None))
+        elif type(item) is list:
+            for index, child in enumerate(item):
+                visit(child, f"{path}/{index}")
+        elif type(item) is dict:
+            for key in sorted(item):
+                escaped = key.replace("~", "~0").replace("/", "~1")
+                visit(item[key], f"{path}/{escaped}")
+
+    visit(value, location)
+    return tuple(origins)
 
 
 @dataclass(frozen=True, slots=True)
@@ -852,6 +888,216 @@ class PersistedHead:
             raise ValueError("persisted head frame_hash must be 64 lowercase hex")
 
 
+_AUTHORITY_CAPABILITY = object()
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class AuthorityCheckpoint:
+    """Authenticated authority snapshot binding all accepted frame hashes."""
+
+    canonical_repository: str
+    protected_ref: str
+    accepted_commit: str
+    bootstrap_profile_sha256: str
+    chain_sha256: str
+    stream_id: str
+    genesis_frame_hash: str
+    selected_head: PersistedHead
+    selected_payload_hash: str
+    frame_hashes: tuple[str, ...]
+    kind_families: Mapping[str, str]
+    number_profile: str
+    evidence_id: str
+
+    @classmethod
+    def from_authenticated(
+        cls,
+        document: Mapping[str, JsonValue],
+        *,
+        authenticator: Callable[[bytes], bool],
+    ) -> AuthorityCheckpoint:
+        """Construct only after an external authenticator accepts the document."""
+
+        if not callable(authenticator):
+            raise TypeError("authenticator must be callable")
+        evidence = canonicalize(dict(document))
+        if authenticator(evidence) is not True:
+            raise ValueError("authority checkpoint authentication failed")
+        return cls._create(
+            document,
+            evidence_id=hashlib.sha256(evidence).hexdigest(),
+            capability=_AUTHORITY_CAPABILITY,
+        )
+
+    @classmethod
+    def _create(
+        cls,
+        document: Mapping[str, JsonValue],
+        *,
+        evidence_id: str,
+        capability: object,
+    ) -> AuthorityCheckpoint:
+        if capability is not _AUTHORITY_CAPABILITY:
+            raise PermissionError("authority checkpoint capability required")
+        selected = document.get("selected_head")
+        kinds = document.get("kind_families")
+        hashes = document.get("frame_hashes")
+        if (
+            type(selected) is not dict
+            or type(kinds) is not dict
+            or type(hashes) is not list
+        ):
+            raise ValueError("authority checkpoint document has an invalid shape")
+        value = object.__new__(cls)
+        scalar_fields = (
+            "canonical_repository",
+            "protected_ref",
+            "accepted_commit",
+            "bootstrap_profile_sha256",
+            "chain_sha256",
+            "stream_id",
+            "genesis_frame_hash",
+            "number_profile",
+        )
+        for name in scalar_fields:
+            item = document.get(name)
+            if type(item) is not str:
+                raise TypeError(f"authority checkpoint {name} must be text")
+            object.__setattr__(value, name, item)
+        object.__setattr__(
+            value,
+            "selected_head",
+            PersistedHead(
+                seq=int(selected["seq"]),
+                frame_hash=selected["frame_hash"],
+            ),
+        )
+        object.__setattr__(
+            value,
+            "selected_payload_hash",
+            selected["payload_hash"],
+        )
+        frame_hashes = tuple(hashes)
+        if not frame_hashes:
+            raise ValueError("authority checkpoint frame_hashes cannot be empty")
+        for frame_hash in frame_hashes:
+            _validate_hash(frame_hash, field_name="checkpoint_frame_hash")
+        object.__setattr__(value, "frame_hashes", frame_hashes)
+        kind_families = dict(kinds)
+        if any(
+            type(kind) is not str or family not in {"body", "memory", "swarm"}
+            for kind, family in kind_families.items()
+        ):
+            raise ValueError("authority checkpoint kind family is invalid")
+        object.__setattr__(
+            value,
+            "kind_families",
+            MappingProxyType(dict(sorted(kind_families.items()))),
+        )
+        object.__setattr__(value, "evidence_id", evidence_id)
+        if len(value.accepted_commit) != 40 or any(
+            character not in "0123456789abcdef"
+            for character in value.accepted_commit
+        ):
+            raise ValueError("authority checkpoint commit must be 40 lowercase hex")
+        for digest in (
+            value.bootstrap_profile_sha256,
+            value.chain_sha256,
+            value.genesis_frame_hash,
+            value.selected_payload_hash,
+            value.evidence_id,
+        ):
+            _validate_hash(digest, field_name="checkpoint_digest")
+        _stream_family(value.stream_id)
+        if value.frame_hashes[0] != value.genesis_frame_hash:
+            raise ValueError("authority checkpoint genesis is not frame zero")
+        if value.frame_hashes[value.selected_head.seq] != value.selected_head.frame_hash:
+            raise ValueError("authority checkpoint selected head is inconsistent")
+        if value.number_profile not in {
+            NUMBER_PROFILE_BINARY64,
+            NUMBER_PROFILE_EXACT_INTEGER,
+        }:
+            raise ValueError("authority checkpoint number profile is unsupported")
+        return value
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class KindFamilyRegistry:
+    """Kind-family bindings that are local or checkpoint-authenticated."""
+
+    kind_families: Mapping[str, str]
+    genesis_hashes: Mapping[str, str]
+    registry_id: str | None
+    checkpoint: AuthorityCheckpoint | None
+
+    @classmethod
+    def local(
+        cls,
+        kind_families: Mapping[str, str],
+        *,
+        genesis_hashes: Mapping[str, str] | None = None,
+        registry_id: str | None = None,
+    ) -> KindFamilyRegistry:
+        return cls._create(
+            kind_families,
+            genesis_hashes or {},
+            registry_id=registry_id,
+            checkpoint=None,
+        )
+
+    @classmethod
+    def from_checkpoint(
+        cls,
+        checkpoint: AuthorityCheckpoint,
+    ) -> KindFamilyRegistry:
+        if not isinstance(checkpoint, AuthorityCheckpoint):
+            raise TypeError("checkpoint must be AuthorityCheckpoint")
+        return cls._create(
+            checkpoint.kind_families,
+            {checkpoint.stream_id: checkpoint.genesis_frame_hash},
+            registry_id=checkpoint.evidence_id,
+            checkpoint=checkpoint,
+        )
+
+    @classmethod
+    def _create(
+        cls,
+        kind_families: Mapping[str, str],
+        genesis_hashes: Mapping[str, str],
+        *,
+        registry_id: str | None,
+        checkpoint: AuthorityCheckpoint | None,
+    ) -> KindFamilyRegistry:
+        value = object.__new__(cls)
+        kinds = dict(kind_families)
+        genesis = dict(genesis_hashes)
+        if any(
+            type(kind) is not str or family not in {"body", "memory", "swarm"}
+            for kind, family in kinds.items()
+        ):
+            raise ValueError("kind_families contains an invalid binding")
+        for stream_id, frame_hash in genesis.items():
+            _stream_family(stream_id)
+            _validate_hash(frame_hash, field_name="genesis_hash")
+        object.__setattr__(
+            value,
+            "kind_families",
+            MappingProxyType(dict(sorted(kinds.items()))),
+        )
+        object.__setattr__(
+            value,
+            "genesis_hashes",
+            MappingProxyType(dict(sorted(genesis.items()))),
+        )
+        object.__setattr__(value, "registry_id", registry_id)
+        object.__setattr__(value, "checkpoint", checkpoint)
+        return value
+
+    @property
+    def verified(self) -> bool:
+        return self.checkpoint is not None
+
+
 @dataclass(frozen=True, slots=True)
 class StreamTrustPolicy:
     """Immutable external trust root for one stream."""
@@ -861,6 +1107,22 @@ class StreamTrustPolicy:
     prior_head: PersistedHead | None = None
     approved_re_genesis_hashes: frozenset[str] = frozenset()
     number_profile: str = NUMBER_PROFILE_BINARY64
+    checkpoint: AuthorityCheckpoint | None = None
+
+    @classmethod
+    def from_checkpoint(
+        cls,
+        checkpoint: AuthorityCheckpoint,
+    ) -> StreamTrustPolicy:
+        if not isinstance(checkpoint, AuthorityCheckpoint):
+            raise TypeError("checkpoint must be AuthorityCheckpoint")
+        return cls(
+            stream_id=checkpoint.stream_id,
+            trusted_genesis_hash=checkpoint.genesis_frame_hash,
+            prior_head=checkpoint.selected_head,
+            number_profile=checkpoint.number_profile,
+            checkpoint=checkpoint,
+        )
 
     def __post_init__(self) -> None:
         _stream_family(self.stream_id)
@@ -874,6 +1136,11 @@ class StreamTrustPolicy:
             NUMBER_PROFILE_EXACT_INTEGER,
         }:
             raise ValueError("number_profile is not supported")
+        if self.checkpoint is not None and not isinstance(
+            self.checkpoint,
+            AuthorityCheckpoint,
+        ):
+            raise TypeError("checkpoint must be AuthorityCheckpoint or None")
         _validate_hash(
             self.trusted_genesis_hash,
             field_name="trusted_genesis_hash",
@@ -904,6 +1171,7 @@ class VerifiedFrame:
     prev: str | None
     prev_wave: str | None
     sig: str | None = field(repr=False)
+    _number_origins: tuple[NumberOrigin, ...] = field(repr=False, compare=False)
     _canonical_bytes: bytes = field(repr=False, compare=True)
 
     @classmethod
@@ -922,6 +1190,7 @@ class VerifiedFrame:
         prev: str | None,
         prev_wave: str | None,
         sig: str | None,
+        number_origins: tuple[NumberOrigin, ...],
         canonical_bytes: bytes,
     ) -> VerifiedFrame:
         value = object.__new__(cls)
@@ -937,6 +1206,7 @@ class VerifiedFrame:
         object.__setattr__(value, "prev", prev)
         object.__setattr__(value, "prev_wave", prev_wave)
         object.__setattr__(value, "sig", sig)
+        object.__setattr__(value, "_number_origins", tuple(number_origins))
         object.__setattr__(value, "_canonical_bytes", bytes(canonical_bytes))
         return value
 
@@ -1005,7 +1275,7 @@ def _verified_frame(frame: Frame, family: str) -> VerifiedFrame:
         kind=frame["kind"],
         stream_id=frame["stream_id"],
         family=family,
-        seq=frame["seq"],
+        seq=int(frame["seq"]),
         utc=frame["utc"],
         payload=payload,
         payload_hash=frame["payload_hash"],
@@ -1013,6 +1283,7 @@ def _verified_frame(frame: Frame, family: str) -> VerifiedFrame:
         prev=frame["prev"],
         prev_wave=frame["prev_wave"],
         sig=frame["sig"],
+        number_origins=_number_origins(payload),
         canonical_bytes=canonicalize(frame),
     )
 
@@ -1023,6 +1294,7 @@ def _intrinsic_frame(
     registry: KindFamilyRegistry,
     expected_stream_id: str | None,
     location: str,
+    allow_local_registry: bool = False,
 ) -> VerificationReport[VerifiedFrame]:
     try:
         if not isinstance(frame_value, Mapping):
@@ -1059,7 +1331,7 @@ def _intrinsic_frame(
         _validate_kind(frame["kind"])
         family = _stream_family(frame["stream_id"])
         if (
-            type(frame["seq"]) is not int
+            type(frame["seq"]) not in (int, _ParsedInteger)
             or not 0 <= frame["seq"] <= MAX_SAFE_INTEGER
         ):
             _raise(
@@ -1103,7 +1375,7 @@ def _intrinsic_frame(
                     remediation=diagnostic.remediation,
                 )
             ) from exc
-        if not registry.verified:
+        if not registry.verified and not allow_local_registry:
             _raise(
                 "registry-unverified",
                 "kind-family registry is not authenticated",
@@ -1368,6 +1640,53 @@ def check_frame(
     return report
 
 
+def check_frame_local(
+    frame: FrameMapping,
+    *,
+    registry: KindFamilyRegistry,
+    head: VerifiedFrame | None = None,
+    expected_stream_id: str | None = None,
+    signature_verifier: SignatureVerifier | None = None,
+) -> VerificationReport[VerifiedFrame]:
+    """Verify one frame with an explicitly local/untrusted registry."""
+
+    if not isinstance(registry, KindFamilyRegistry):
+        raise TypeError("registry must be KindFamilyRegistry")
+    if registry.verified:
+        raise ValueError("check_frame_local requires a local registry")
+    report = _intrinsic_frame(
+        frame,
+        registry=registry,
+        expected_stream_id=expected_stream_id,
+        location="frame",
+        allow_local_registry=True,
+    )
+    if report.value is None:
+        return report
+    linked = _link_diagnostic(report.value, head=head, location="frame")
+    if linked is not None:
+        return VerificationReport(None, (linked,))
+    signature = _signature_diagnostic(
+        report.value,
+        signature_verifier=signature_verifier,
+        location="frame",
+    )
+    if signature is not None:
+        return VerificationReport(None, (signature,))
+    return VerificationReport(
+        report.value,
+        (
+            _diagnostic(
+                "local-untrusted",
+                "frame is valid only under a local registry",
+                operation="check-frame",
+                location="frame",
+                status=DiagnosticStatus.WARNING,
+            ),
+        ),
+    )
+
+
 def verify_frame(
     frame: FrameMapping,
     *,
@@ -1379,6 +1698,25 @@ def verify_frame(
     """Raising wrapper over :func:`check_frame`."""
 
     return check_frame(
+        frame,
+        registry=registry,
+        head=head,
+        expected_stream_id=expected_stream_id,
+        signature_verifier=signature_verifier,
+    ).require(ProtocolError)
+
+
+def verify_frame_local(
+    frame: FrameMapping,
+    *,
+    registry: KindFamilyRegistry,
+    head: VerifiedFrame | None = None,
+    expected_stream_id: str | None = None,
+    signature_verifier: SignatureVerifier | None = None,
+) -> VerifiedFrame:
+    """Raising wrapper for explicitly local frame verification."""
+
+    return check_frame_local(
         frame,
         registry=registry,
         head=head,
@@ -1416,6 +1754,33 @@ def _trust_diagnostic(
     registry: KindFamilyRegistry,
     trust_policy: StreamTrustPolicy,
 ) -> Diagnostic | None:
+    checkpoint = trust_policy.checkpoint
+    if checkpoint is None or registry.checkpoint is None:
+        return _diagnostic(
+            "authority-checkpoint-required",
+            "trusted verification requires a checkpoint-derived registry and policy",
+            operation="trust-stream",
+            location="checkpoint",
+        )
+    if registry.checkpoint.evidence_id != checkpoint.evidence_id:
+        return _diagnostic(
+            "authority-checkpoint-mismatch",
+            "registry and trust policy derive from different checkpoints",
+            operation="trust-stream",
+            location="checkpoint",
+        )
+    if (
+        trust_policy.stream_id != checkpoint.stream_id
+        or trust_policy.trusted_genesis_hash != checkpoint.genesis_frame_hash
+        or trust_policy.prior_head != checkpoint.selected_head
+        or trust_policy.number_profile != checkpoint.number_profile
+    ):
+        return _diagnostic(
+            "authority-checkpoint-mismatch",
+            "trust policy does not preserve its checkpoint bindings",
+            operation="trust-stream",
+            location="checkpoint",
+        )
     if stream.head.stream_id != trust_policy.stream_id:
         return _diagnostic(
             "trust-stream-mismatch",
@@ -1457,18 +1822,29 @@ def _trust_diagnostic(
             )
     if trust_policy.number_profile == NUMBER_PROFILE_EXACT_INTEGER:
         for index, frame in enumerate(stream.frames):
-            if _contains_non_exact_integer(frame.to_dict()):
+            if _violates_exact_integer(frame):
                 return _diagnostic(
                     "trust-number-profile-mismatch",
                     "stream contains numbers forbidden by trust policy",
                     operation="trust-stream",
                     location=f"frame[{index}]",
+                    context={
+                        "number_location": next(
+                            origin.location
+                            for origin in frame._number_origins
+                            if origin.kind == "float"
+                            or (
+                                origin.kind == "integer"
+                                and not -MAX_SAFE_INTEGER
+                                <= origin.value
+                                <= MAX_SAFE_INTEGER
+                            )
+                        )
+                    },
                     remediation="use only uint53/int53 numbers in this authority",
                 )
     prior = trust_policy.prior_head
-    if prior is None:
-        return None
-    if stream.head.seq < prior.seq:
+    if prior is not None and stream.head.seq < prior.seq:
         return _diagnostic(
             "head-rollback",
             "presented stream head is older than the persisted trusted head",
@@ -1479,32 +1855,51 @@ def _trust_diagnostic(
                 "presented_seq": stream.head.seq,
             },
         )
-    known = stream.frames[prior.seq]
-    if known.frame_hash != prior.frame_hash:
+    if prior is not None:
+        known = stream.frames[prior.seq]
+        if known.frame_hash != prior.frame_hash:
+            return _diagnostic(
+                "known-head-conflict",
+                "known sequence has a conflicting frame hash",
+                operation="trust-stream",
+                location=f"frame[{prior.seq}]",
+                context={
+                    "actual_frame_hash": known.frame_hash,
+                    "persisted_frame_hash": prior.frame_hash,
+                    "seq": prior.seq,
+                },
+            )
+    frame_hashes = tuple(frame.frame_hash for frame in stream.frames)
+    if frame_hashes != checkpoint.frame_hashes:
         return _diagnostic(
-            "known-head-conflict",
-            "known sequence has a conflicting frame hash",
+            "authority-snapshot-mismatch",
+            "verified stream does not match the checkpoint frame snapshot",
             operation="trust-stream",
-            location=f"frame[{prior.seq}]",
-            context={
-                "actual_frame_hash": known.frame_hash,
-                "persisted_frame_hash": prior.frame_hash,
-                "seq": prior.seq,
-            },
+            location="stream",
+        )
+    if (
+        stream.head.seq != checkpoint.selected_head.seq
+        or stream.head.frame_hash != checkpoint.selected_head.frame_hash
+        or stream.head.payload_hash != checkpoint.selected_payload_hash
+    ):
+        return _diagnostic(
+            "authority-snapshot-mismatch",
+            "stream head does not match the checkpoint selection",
+            operation="trust-stream",
+            location="stream.head",
         )
     return None
 
 
-def _contains_non_exact_integer(value: JsonValue) -> bool:
-    if type(value) is float:
-        return True
-    if type(value) is int:
-        return not -MAX_SAFE_INTEGER <= value <= MAX_SAFE_INTEGER
-    if type(value) is list:
-        return any(_contains_non_exact_integer(item) for item in value)
-    if type(value) is dict:
-        return any(_contains_non_exact_integer(item) for item in value.values())
-    return False
+def _violates_exact_integer(frame: VerifiedFrame) -> bool:
+    return any(
+        origin.kind == "float"
+        or (
+            origin.kind == "integer"
+            and not -MAX_SAFE_INTEGER <= origin.value <= MAX_SAFE_INTEGER
+        )
+        for origin in frame._number_origins
+    )
 
 
 def _check_stream(
@@ -1561,6 +1956,7 @@ def _check_stream(
             registry=registry,
             expected_stream_id=stream_id,
             location=location,
+            allow_local_registry=local,
         )
         if intrinsic.value is None:
             return VerificationReport(None, intrinsic.diagnostics)
@@ -1569,23 +1965,27 @@ def _check_stream(
             stream_id = candidate.stream_id
         previous_hash = seen_seq.get(candidate.seq)
         if previous_hash is not None:
-            code = (
-                "duplicate-frame"
-                if previous_hash == candidate.frame_hash
-                else "fork-detected"
-            )
+            if previous_hash == candidate.frame_hash:
+                diagnostic = _diagnostic(
+                    "duplicate-frame",
+                    "duplicate frame at an existing sequence",
+                    operation="check-stream",
+                    protocol_step="4",
+                    location=location,
+                    context={"seq": candidate.seq},
+                )
+            else:
+                diagnostic = _diagnostic(
+                    "fork-detected",
+                    "competing valid frames occupy the same sequence",
+                    operation="check-stream",
+                    protocol_step="4",
+                    location=location,
+                    context={"seq": candidate.seq},
+                )
             return VerificationReport(
                 None,
-                (
-                    _diagnostic(
-                        code,
-                        "duplicate sequence or competing branch detected",
-                        operation="check-stream",
-                        protocol_step="4",
-                        location=location,
-                        context={"seq": candidate.seq},
-                    ),
-                ),
+                (diagnostic,),
             )
         if candidate.frame_hash in seen_hashes:
             return VerificationReport(
@@ -1712,6 +2112,10 @@ def check_stream_local(
 ) -> VerificationReport[VerifiedStream]:
     """Verify internal consistency and label the result local/untrusted."""
 
+    if not isinstance(registry, KindFamilyRegistry):
+        raise TypeError("registry must be KindFamilyRegistry")
+    if registry.verified:
+        raise ValueError("check_stream_local requires a local registry")
     return _check_stream(
         frames,
         registry=registry,
@@ -1810,6 +2214,7 @@ build_frame = build_frame_mapping
 
 
 __all__ = (
+    "AuthorityCheckpoint",
     "DEFAULT_VERIFY_SECONDS",
     "FRAME_KEYS",
     "Frame",
@@ -1827,6 +2232,7 @@ __all__ = (
     "MAX_STREAM_FRAMES",
     "NUMBER_PROFILE_BINARY64",
     "NUMBER_PROFILE_EXACT_INTEGER",
+    "NumberOrigin",
     "PARTICLE_SPACE",
     "PROTOCOL_VERSION",
     "PersistedHead",
@@ -1842,10 +2248,12 @@ __all__ = (
     "canonical",
     "canonicalize",
     "check_frame",
+    "check_frame_local",
     "check_stream",
     "check_stream_local",
     "strict_json_loads",
     "verify_frame",
+    "verify_frame_local",
     "verify_stream",
     "verify_stream_local",
 )

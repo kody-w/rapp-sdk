@@ -34,6 +34,7 @@ from pathlib import Path
 
 import rapp_sdk
 from rapp_sdk import (
+    AuthorityCheckpoint,
     KindFamilyRegistry,
     SPEC_REVISION_SCHEMA_ID,
     SpecChain,
@@ -43,8 +44,12 @@ from rapp_sdk import (
     VerifiedFrame,
     build_frame_mapping,
     build_spec_revision_frame,
+    canonicalize,
     check_frame,
     read_spec_revision_schema,
+    selected_authority_checkpoint,
+    selected_authority_registry,
+    selected_authority_trust_policy,
 )
 
 source = Path(sys.argv[1]).read_bytes()
@@ -58,6 +63,16 @@ assert read_spec_revision_schema() == source
 assert hashlib.sha256(installed).hexdigest() == sys.argv[2]
 assert json.loads(installed)["$id"] == SPEC_REVISION_SCHEMA_ID
 assert SPEC_REVISION_SCHEMA_ID == "urn:rapp:schema:spec-revision:1"
+authority_resource = files("rapp_sdk").joinpath(
+    "authority/selected-rev14.json"
+)
+assert authority_resource.is_file()
+selected_checkpoint = selected_authority_checkpoint()
+assert selected_checkpoint.accepted_commit == (
+    "caf6ef276cafa92aa744499af90dc1a28559941a"
+)
+assert selected_authority_registry().checkpoint is selected_checkpoint
+assert selected_authority_trust_policy().checkpoint is selected_checkpoint
 distribution = importlib.metadata.distribution("rapp-sdk")
 assert distribution.version == rapp_sdk.__version__
 environment_root = Path(sys.argv[4]).resolve()
@@ -75,6 +90,33 @@ with redirect_stdout(output):
     runpy.run_path(str(example), run_name="__main__")
 assert "rev-2 seq=1" in output.getvalue()
 
+
+def checkpoint(*frames):
+    selected = frames[-1]
+    return AuthorityCheckpoint.from_authenticated(
+        {
+            "canonical_repository": "https://example.test/authority",
+            "protected_ref": "refs/heads/main",
+            "accepted_commit": "a" * 40,
+            "bootstrap_profile_sha256": "b" * 64,
+            "chain_sha256": hashlib.sha256(
+                b"".join(canonicalize(frame) + b"\n" for frame in frames)
+            ).hexdigest(),
+            "stream_id": frames[0]["stream_id"],
+            "genesis_frame_hash": frames[0]["frame_hash"],
+            "selected_head": {
+                "seq": selected["seq"],
+                "frame_hash": selected["frame_hash"],
+                "payload_hash": selected["payload_hash"],
+            },
+            "frame_hashes": [frame["frame_hash"] for frame in frames],
+            "kind_families": {"body.pulse": "body"},
+            "number_profile": "rfc8785-binary64",
+        },
+        authenticator=lambda evidence: True,
+    )
+
+
 stream_id = "rappid:@example/distribution:" + "0" * 64
 inline = build_spec_revision_frame(
     revision="rev-smoke",
@@ -82,15 +124,9 @@ inline = build_spec_revision_frame(
     utc="2026-08-30T00:00:00.000Z",
     stream_id=stream_id,
 )
-registry = KindFamilyRegistry(
-    {"body.pulse": "body"},
-    genesis_hashes={stream_id: inline["frame_hash"]},
-    verified=True,
-)
-trust = StreamTrustPolicy(
-    stream_id=stream_id,
-    trusted_genesis_hash=inline["frame_hash"],
-)
+inline_checkpoint = checkpoint(inline)
+registry = KindFamilyRegistry.from_checkpoint(inline_checkpoint)
+trust = StreamTrustPolicy.from_checkpoint(inline_checkpoint)
 report = check_frame(inline, registry=registry)
 assert report.ok
 verified = report.require()
@@ -124,15 +160,9 @@ pointer = build_frame_mapping(
     },
     None,
 )
-pointer_registry = KindFamilyRegistry(
-    {"body.pulse": "body"},
-    genesis_hashes={stream_id: pointer["frame_hash"]},
-    verified=True,
-)
-pointer_trust = StreamTrustPolicy(
-    stream_id=stream_id,
-    trusted_genesis_hash=pointer["frame_hash"],
-)
+pointer_checkpoint = checkpoint(pointer)
+pointer_registry = KindFamilyRegistry.from_checkpoint(pointer_checkpoint)
+pointer_trust = StreamTrustPolicy.from_checkpoint(pointer_checkpoint)
 pointer_chain = SpecChain.from_frames(
     [pointer],
     registry=pointer_registry,

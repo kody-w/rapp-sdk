@@ -23,6 +23,9 @@ classifiers = [
 ]
 dependencies = []
 
+[project.optional-dependencies]
+test = ["jsonschema>=4.23,<5"]
+
 [project.urls]
 Homepage = "https://github.com/kody-w/rapp-sdk"
 Documentation = "https://github.com/kody-w/rapp-sdk/blob/main/docs/spec-chain.md"
@@ -37,6 +40,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 rapp_sdk = ["py.typed"]
+"rapp_sdk.authority" = ["*.json"]
 "rapp_sdk.schemas" = ["*.json"]
 
 [tool.setuptools.data-files]

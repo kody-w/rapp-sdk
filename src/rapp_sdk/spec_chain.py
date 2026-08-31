@@ -8,7 +8,7 @@ import re
 import time
 import urllib.parse
 from collections.abc import Iterable, Iterator, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import TypeAlias, overload
@@ -41,6 +41,15 @@ _HEX40_RE = re.compile(r"^[0-9a-f]{40}$", re.ASCII)
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}$", re.ASCII)
 _REVISION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", re.ASCII)
 _DECIMAL_BYTES_RE = re.compile(r"^(?:0|[1-9][0-9]*)$", re.ASCII)
+_CANONICAL_REPOSITORY_RE = re.compile(
+    r"^https://"
+    r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)"
+    r"(?:\.(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*"
+    r"(?::443)?/"
+    r"(?!/)(?!.*//)(?!.*(?:^|/)\.\.?(?:/|$))"
+    r"(?!.*[\\%?#\x00-\x20\x7f])(?:[^/]+/)*[^/]+$",
+    re.ASCII,
+)
 _POINTER_KEYS = frozenset(
     {
         "canonical_repo",
@@ -105,7 +114,7 @@ def _validate_https_repository(repository: JsonValue) -> str:
     if (
         type(repository) is not str
         or not 1 <= len(repository) <= 2048
-        or not repository.startswith("https://")
+        or _CANONICAL_REPOSITORY_RE.fullmatch(repository) is None
         or any(
             ord(character) <= 0x20 or ord(character) == 0x7F
             for character in repository
@@ -127,15 +136,7 @@ def _validate_https_repository(repository: JsonValue) -> str:
                 location="payload.canonical_repo",
             )
         ) from exc
-    if (
-        parsed.scheme != "https"
-        or not parsed.hostname
-        or parsed.username is not None
-        or parsed.password is not None
-        or port not in (None, 443)
-        or parsed.query
-        or parsed.fragment
-    ):
+    if parsed.scheme != "https" or not parsed.hostname or port not in (None, 443):
         _chain_fail(
             "invalid-repository",
             "canonical_repo must be an HTTPS URL without credentials or query",
@@ -200,8 +201,8 @@ def _validate_sha256(value: JsonValue, *, location: str) -> str:
 
 
 def _legacy_size(value: JsonValue) -> int:
-    if type(value) is int:
-        size = value
+    if isinstance(value, int) and not isinstance(value, bool):
+        size = int(value)
     elif type(value) is str and _DECIMAL_BYTES_RE.fullmatch(value):
         size = int(value)
     else:
@@ -220,19 +221,20 @@ def _legacy_size(value: JsonValue) -> int:
 
 
 def _inline_size(value: JsonValue) -> int:
-    if type(value) is not int:
+    if not isinstance(value, int) or isinstance(value, bool):
         _chain_fail(
             "invalid-inline-size",
             "normative.bytes must be an integer",
             location="payload.normative.bytes",
         )
-    if not 0 <= value <= MAX_SPEC_BYTES:
+    size = int(value)
+    if not 0 <= size <= MAX_SPEC_BYTES:
         _chain_fail(
             "spec-size-exceeded",
             f"normative.bytes exceeds {MAX_SPEC_BYTES} bytes",
             location="payload.normative.bytes",
         )
-    return value
+    return size
 
 
 @dataclass(frozen=True, slots=True)
@@ -276,7 +278,7 @@ class ContentLocator:
         )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class SpecRevision:
     """Immutable metadata for one verified specification revision."""
 
@@ -288,7 +290,30 @@ class SpecRevision:
     locator: ContentLocator | None
     is_inline: bool
     frame: VerifiedFrame
-    _inline_bytes: bytes | None = field(repr=False, compare=False)
+
+    @classmethod
+    def _create(
+        cls,
+        *,
+        address: RevisionAddress,
+        stream_id: str,
+        normative_sha256: str,
+        normative_bytes: int,
+        media_type: str,
+        locator: ContentLocator | None,
+        is_inline: bool,
+        frame: VerifiedFrame,
+    ) -> SpecRevision:
+        value = object.__new__(cls)
+        object.__setattr__(value, "address", address)
+        object.__setattr__(value, "stream_id", stream_id)
+        object.__setattr__(value, "normative_sha256", normative_sha256)
+        object.__setattr__(value, "normative_bytes", normative_bytes)
+        object.__setattr__(value, "media_type", media_type)
+        object.__setattr__(value, "locator", locator)
+        object.__setattr__(value, "is_inline", is_inline)
+        object.__setattr__(value, "frame", frame)
+        return value
 
     @property
     def revision(self) -> str:
@@ -313,7 +338,32 @@ class SpecRevision:
         return self.frame.to_json_bytes()
 
     def inline_bytes(self) -> bytes | None:
-        return self._inline_bytes
+        payload = self.frame.to_dict()["payload"]
+        if type(payload) is not dict:
+            raise RuntimeError("verified revision payload is not an object")
+        normative = payload.get("normative")
+        if normative is None:
+            return None
+        if type(normative) is not dict or type(normative.get("text")) is not str:
+            _chain_fail(
+                "invalid-inline-normative",
+                "verified inline normative object is malformed",
+                location=f"frame[{self.seq}].payload.normative",
+            )
+        data = normative["text"].encode("utf-8")
+        if len(data) != self.normative_bytes:
+            _chain_fail(
+                "inline-size-mismatch",
+                "verified inline bytes no longer match their length",
+                location=f"frame[{self.seq}].payload.normative",
+            )
+        if hashlib.sha256(data).hexdigest() != self.normative_sha256:
+            _chain_fail(
+                "inline-hash-mismatch",
+                "verified inline bytes no longer match their checksum",
+                location=f"frame[{self.seq}].payload.normative",
+            )
+        return data
 
 
 def _profile_revision(frame: VerifiedFrame) -> SpecRevision:
@@ -443,7 +493,7 @@ def _profile_revision(frame: VerifiedFrame) -> SpecRevision:
         normative_sha = pointer_sha
         normative_size = pointer_size
 
-    return SpecRevision(
+    return SpecRevision._create(
         address=RevisionAddress(
             revision=revision,
             seq=frame.seq,
@@ -457,7 +507,6 @@ def _profile_revision(frame: VerifiedFrame) -> SpecRevision:
         locator=locator,
         is_inline=inline_bytes is not None,
         frame=frame,
-        _inline_bytes=inline_bytes,
     )
 
 
@@ -728,6 +777,23 @@ class SpecChain:
                 location="chain",
                 context={"actual_bytes": len(octets), "max_bytes": max_bytes},
             )
+        if (
+            not local
+            and trust_policy is not None
+            and trust_policy.checkpoint is not None
+        ):
+            actual_chain_sha256 = hashlib.sha256(octets).hexdigest()
+            expected_chain_sha256 = trust_policy.checkpoint.chain_sha256
+            if actual_chain_sha256 != expected_chain_sha256:
+                _chain_fail(
+                    "authority-snapshot-mismatch",
+                    "JSONL bytes do not match the authenticated checkpoint",
+                    location="chain",
+                    context={
+                        "actual_sha256": actual_chain_sha256,
+                        "expected_sha256": expected_chain_sha256,
+                    },
+                )
         return cls._from_frames(
             _jsonl_frames(
                 octets,
@@ -932,7 +998,7 @@ class SpecChain:
         return self._stream.to_jsonl_bytes()
 
     def contains(self, revision: SpecRevision) -> bool:
-        return self._by_frame_hash.get(revision.frame_hash) == revision
+        return self._by_frame_hash.get(revision.frame_hash) is revision
 
     def resolve(
         self,

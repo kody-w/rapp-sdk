@@ -3,6 +3,9 @@
 DIAGNOSTIC_CATALOG_VERSION = "1"
 
 DIAGNOSTIC_CODES = (
+    "authority-checkpoint-mismatch",
+    "authority-checkpoint-required",
+    "authority-snapshot-mismatch",
     "blank-chain-line",
     "cached-hash-mismatch",
     "cached-size-mismatch",
@@ -19,6 +22,7 @@ DIAGNOSTIC_CODES = (
     "fetch-size-exceeded",
     "fetch-status",
     "foreign-revision",
+    "fork-detected",
     "frame-count-exceeded",
     "frame-hash-mismatch",
     "head-rollback",

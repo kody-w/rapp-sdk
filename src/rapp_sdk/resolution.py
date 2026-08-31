@@ -15,7 +15,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
 from ._version import __version__
-from .errors import CacheIntegrityError, SpecResolutionError
+from .errors import CacheIntegrityError, SpecChainError, SpecResolutionError
 from .reports import Diagnostic
 from .spec_chain import (
     ContentLocator,
@@ -508,12 +508,21 @@ class SpecResolver:
 
         if not isinstance(revision, SpecRevision):
             raise TypeError("revision must be SpecRevision")
-        if not self.chain.contains(revision):
+        try:
+            selected = self.chain.resolve(frame_hash=revision.frame_hash)
+        except (SpecChainError, ValueError) as exc:
             raise _resolution_error(
                 "foreign-revision",
                 "revision does not belong to this chain",
                 location="revision",
+            ) from exc
+        if selected.address != revision.address:
+            raise _resolution_error(
+                "foreign-revision",
+                "revision address does not match this chain",
+                location="revision",
             )
+        revision = selected
         if not self.chain.trusted:
             raise _resolution_error(
                 "untrusted-chain",
