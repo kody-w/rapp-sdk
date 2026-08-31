@@ -43,6 +43,8 @@ registered kind-family enforcement, immutable verified frames and streams,
 external genesis/head trust policy, explicit historical resolution, and a
 checksum-revalidating content-addressed cache. See
 [`docs/spec-chain.md`](docs/spec-chain.md).
+The product-neutral collaboration extension is documented in
+[`docs/projects.md`](docs/projects.md).
 
 The SDK includes the closed `rapp-ring-yard/1` manifest: a deterministic
 four-track by five-ring yard with explicit cell RAPPIDs, isolated paths,
@@ -68,7 +70,13 @@ starting any of them. See
 - Schema: `SPEC_REVISION_SCHEMA_ID`, `read_spec_revision_schema`,
   `RING_YARD_MANIFEST_SCHEMA_ID`, `read_ring_yard_manifest_schema`
 - Errors: `RappSDKError`, `ProtocolError`, `SpecChainError`,
-  `SpecResolutionError`, `CacheIntegrityError`, `RingManifestError`
+  `SpecResolutionError`, `CacheIntegrityError`, `RingManifestError`,
+  `ProjectProtocolError`
+- RAPP Projects: `ProjectActor`, `ProjectCheckpoint`,
+  `PROJECT_EVENTS`, `PROJECT_FRAME_KIND`, `build_project_rappid`,
+  `build_project_frame`, `verify_project_stream`,
+  `build_project_egg_manifest`, `pack_project_egg`, `read_project_egg`,
+  and `verify_project_egg_manifest`
 
 All public callables are typed, and the wheel includes a `py.typed` marker.
 Importing `rapp_sdk` performs no I/O or runtime dependency discovery.
@@ -91,8 +99,8 @@ python3 tests/ring_manifest_schema_smoke.py
 PYTHONPATH=src python3 tests/doctest_smoke.py
 python3 -m build --no-isolation --outdir .build-artifacts
 python3 tests/distribution_install_smoke.py \
-  .build-artifacts/rapp_sdk-0.1.0-py3-none-any.whl \
-  .build-artifacts/rapp_sdk-0.1.0.tar.gz
+  .build-artifacts/rapp_sdk-0.2.0-py3-none-any.whl \
+  .build-artifacts/rapp_sdk-0.2.0.tar.gz
 ```
 
 For interpreters whose standard `venv` omits setuptools, provide a local
@@ -102,8 +110,8 @@ site-packages directory containing the pinned setuptools 84.0.0 backend:
 python3 -m pip install --target .setuptools-provider setuptools==84.0.0
 RAPP_SDK_SETUPTOOLS_SITE=.setuptools-provider \
   python3.14 tests/distribution_install_smoke.py \
-  .build-artifacts/rapp_sdk-0.1.0-py3-none-any.whl \
-  .build-artifacts/rapp_sdk-0.1.0.tar.gz
+  .build-artifacts/rapp_sdk-0.2.0-py3-none-any.whl \
+  .build-artifacts/rapp_sdk-0.2.0.tar.gz
 ```
 
 Pull requests must pass the `protocol` matrix on Python 3.11 through 3.14,
