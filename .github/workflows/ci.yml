@@ -26,8 +26,8 @@ jobs:
           - "3.13"
           - "3.14"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -52,8 +52,8 @@ jobs:
           - macos-14
           - windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
           cache: pip
@@ -72,8 +72,8 @@ jobs:
     name: distribution (3.14)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
           cache: pip
@@ -95,7 +95,7 @@ jobs:
           python tests/distribution_install_smoke.py \
             .build-artifacts/rapp_sdk-0.1.0-py3-none-any.whl \
             .build-artifacts/rapp_sdk-0.1.0.tar.gz
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: rapp-sdk-0.1.0
           path: .build-artifacts/
