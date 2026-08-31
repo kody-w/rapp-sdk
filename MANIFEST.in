@@ -3,5 +3,6 @@ include src/rapp_sdk/authority/*.json
 include tests/__init__.py tests/authority_fixture.py
 include tests/distribution_install_smoke.py tests/live_authority_refresh.py
 include tests/doctest_smoke.py tests/schema_validator_smoke.py
+include tests/ring_manifest_schema_smoke.py
 include src/rapp_sdk/schemas/*.json
 recursive-include tests/fixtures *.gz *.json *.md

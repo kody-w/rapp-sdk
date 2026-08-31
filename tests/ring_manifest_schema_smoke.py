@@ -5,9 +5,14 @@ from __future__ import annotations
 import copy
 import importlib.metadata
 import json
+import sys
 from collections.abc import Callable
+from pathlib import Path
 
 from jsonschema import Draft202012Validator
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
 
 from rapp_sdk import (
     build_default_ring_yard_manifest,
