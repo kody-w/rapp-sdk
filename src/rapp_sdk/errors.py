@@ -97,11 +97,18 @@ class CacheIntegrityError(SpecResolutionError):
     """A content-addressed cache object failed checksum revalidation."""
 
 
+class RingManifestError(RappSDKError):
+    """A RAPP ring-yard manifest failed closed validation."""
+
+    operation = "ring-manifest"
+
+
 __all__ = (
     "CacheIntegrityError",
     "ErrorContext",
     "ProtocolError",
     "RappSDKError",
+    "RingManifestError",
     "SpecChainError",
     "SpecResolutionError",
 )

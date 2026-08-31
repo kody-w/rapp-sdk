@@ -1,0 +1,1282 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:rapp:schema:ring-yard-manifest:1",
+  "title": "RAPP SDK ring-yard manifest",
+  "description": "Closed rapp-ring-yard/1 structural and locally expressible validation. Conformance also requires the bundled semantic report API named by x-rapp-semantic-validator.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "spec",
+    "yard",
+    "control_plane",
+    "cells"
+  ],
+  "properties": {
+    "spec": {
+      "const": "rapp-ring-yard/1"
+    },
+    "yard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identity",
+        "root"
+      ],
+      "properties": {
+        "identity": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,63}(?![\\s\\S])"
+        },
+        "root": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 1024,
+          "pattern": "^/(?!/)(?!\\.\\.?(?:/|(?![\\s\\S])))(?!.*(?:^|/)\\.\\.?(?:/|(?![\\s\\S])))[A-Za-z0-9._~!$&'()+,;=@-]+(?:/[A-Za-z0-9._~!$&'()+,;=@-]+)*(?![\\s\\S])",
+          "description": "Normalized absolute POSIX path using the documented ASCII path subset."
+        }
+      }
+    },
+    "control_plane": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scheduler",
+        "plan"
+      ],
+      "properties": {
+        "scheduler": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "global_jobs",
+            "per_track_jobs",
+            "per_observer_jobs",
+            "per_subject_jobs",
+            "ready_queue"
+          ],
+          "properties": {
+            "global_jobs": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1024
+            },
+            "per_track_jobs": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1024
+            },
+            "per_observer_jobs": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1024
+            },
+            "per_subject_jobs": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1024
+            },
+            "ready_queue": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            }
+          },
+          "$comment": "The semantic validator additionally requires each local limit to be no greater than global_jobs and ready_queue to be at least global_jobs."
+        },
+        "plan": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "peer_jobs",
+            "self_tests",
+            "total_jobs"
+          ],
+          "properties": {
+            "peer_jobs": {
+              "const": 380
+            },
+            "self_tests": {
+              "const": 20
+            },
+            "total_jobs": {
+              "const": 400
+            }
+          }
+        }
+      }
+    },
+    "cells": {
+      "type": "array",
+      "minItems": 20,
+      "maxItems": 20,
+      "uniqueItems": true,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/cell"
+            },
+            {
+              "properties": {
+                "track": {
+                  "const": "frontier-experimental"
+                },
+                "track_slot": {
+                  "const": 0
+                },
+                "ring": {
+                  "const": "canary"
+                },
+                "ring_slot": {
+                  "const": 0
+                },
+                "ports": {
+                  "properties": {
+                    "gateway": {
+                      "const": 24700
+                    },
+                    "broker": {
+                      "const": 24701
+                    },
+                    "control": {
+                      "const": 24702
+                    },
+                    "metrics": {
+                      "const": 24703
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/cell"
+            },
+            {
+              "properties": {
+                "track": {
+                  "const": "frontier-experimental"
+                },
+                "track_slot": {
+                  "const": 0
+                },
+                "ring": {
+                  "const": "nightly"
+                },
+                "ring_slot": {
+                  "const": 1
+                },
+                "ports": {
+                  "properties": {
+                    "gateway": {
+                      "const": 24704
+                    },
+                    "broker": {
+                      "const": 24705
+                    },
+                    "control": {
+                      "const": 24706
+                    },
+                    "metrics": {
+                      "const": 24707
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/cell"
+            },
+            {
+              "properties": {
+                "track": {
+                  "const": "frontier-experimental"
+                },
+                "track_slot": {
+                  "const": 0
+                },
+                "ring": {
+                  "const": "alpha"
+                },
+                "ring_slot": {
+                  "const": 2
+                },
+                "ports": {
+                  "properties": {
+                    "gateway": {
+                      "const": 24708
+                    },
+                    "broker": {
+                      "const": 24709
+                    },
+                    "control": {
+                      "const": 24710
+                    },
+                    "metrics": {
+                      "const": 24711
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/cell"
+            },
+            {
+              "properties": {
+                "track": {
+                  "const": "frontier-experimental"
+                },
+                "track_slot": {
+                  "const": 0
+                },
+                "ring": {
+                  "const": "beta"
+                },
+                "ring_slot": {
+                  "const": 3
+                },
+                "ports": {
+                  "properties": {
+                    "gateway": {
+                      "const": 24712
+                    },
+                    "broker": {
+                      "const": 24713
+                    },
+                    "control": {
+                      "const": 24714
+                    },
+                    "metrics": {
+                      "const": 24715
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/cell"
+            },
+            {
+              "properties": {
+                "track": {
+                  "const": "frontier-experimental"
+                },
+                "track_slot": {
+                  "const": 0
+                },
+                "ring": {
+                  "const": "grail"
+                },
+                "ring_slot": {
+                  "const": 4
+                },
+                "ports": {
+                  "properties": {
+                    "gateway": {
+                      "const": 24716
+                    },
+                    "broker": {
+                      "const": 24717
+                    },
+                    "control": {
+                      "const": 24718
+                    },
+                    "metrics": {
+                      "const": 24719
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/cell"
+            },
+            {
+              "properties": {
+                "track": {
+                  "const": "frontier"
+                },
+                "track_slot": {
+                  "const": 1
+                },
+                "ring": {
+                  "const": "canary"
+                },
+                "ring_slot": {
+                  "const": 0
+                },
+                "ports": {
+                  "properties": {
+                    "gateway": {
+                      "const": 24732
+                    },
+                    "broker": {
+                      "const": 24733
+                    },
+                    "control": {
+                      "const": 24734
+                    },
+                    "metrics": {
+                      "const": 24735
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/cell"
+            },
+            {
+              "properties": {
+                "track": {
+                  "const": "frontier"
+                },
+                "track_slot": {
+                  "const": 1
+                },
+                "ring": {
+                  "const": "nightly"
+                },
+                "ring_slot": {
+                  "const": 1
+                },
+                "ports": {
+                  "properties": {
+                    "gateway": {
+                      "const": 24736
+                    },
+                    "broker": {
+                      "const": 24737
+                    },
+                    "control": {
+                      "const": 24738
+                    },
+                    "metrics": {
+                      "const": 24739
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/cell"
+            },
+            {
+              "properties": {
+                "track": {
+                  "const": "frontier"
+                },
+                "track_slot": {
+                  "const": 1
+                },
+                "ring": {
+                  "const": "alpha"
+                },
+                "ring_slot": {
+                  "const": 2
+                },
+                "ports": {
+                  "properties": {
+                    "gateway": {
+                      "const": 24740
+                    },
+                    "broker": {
+                      "const": 24741
+                    },
+                    "control": {
+                      "const": 24742
+                    },
+                    "metrics": {
+                      "const": 24743
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/cell"
+            },
+            {
+              "properties": {
+                "track": {
+                  "const": "frontier"
+                },
+                "track_slot": {
+                  "const": 1
+                },
+                "ring": {
+                  "const": "beta"
+                },
+                "ring_slot": {
+                  "const": 3
+                },
+                "ports": {
+                  "properties": {
+                    "gateway": {
+                      "const": 24744
+                    },
+                    "broker": {
+                      "const": 24745
+                    },
+                    "control": {
+                      "const": 24746
+                    },
+                    "metrics": {
+                      "const": 24747
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/cell"
+            },
+            {
+              "properties": {
+                "track": {
+                  "const": "frontier"
+                },
+                "track_slot": {
+                  "const": 1
+                },
+                "ring": {
+                  "const": "grail"
+                },
+                "ring_slot": {
+                  "const": 4
+                },
+                "ports": {
+                  "properties": {
+                    "gateway": {
+                      "const": 24748
+                    },
+                    "broker": {
+                      "const": 24749
+                    },
+                    "control": {
+                      "const": 24750
+                    },
+                    "metrics": {
+                      "const": 24751
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/cell"
+            },
+            {
+              "properties": {
+                "track": {
+                  "const": "brainstem-experimental"
+                },
+                "track_slot": {
+                  "const": 2
+                },
+                "ring": {
+                  "const": "canary"
+                },
+                "ring_slot": {
+                  "const": 0
+                },
+                "ports": {
+                  "properties": {
+                    "gateway": {
+                      "const": 24764
+                    },
+                    "broker": {
+                      "const": 24765
+                    },
+                    "control": {
+                      "const": 24766
+                    },
+                    "metrics": {
+                      "const": 24767
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/cell"
+            },
+            {
+              "properties": {
+                "track": {
+                  "const": "brainstem-experimental"
+                },
+                "track_slot": {
+                  "const": 2
+                },
+                "ring": {
+                  "const": "nightly"
+                },
+                "ring_slot": {
+                  "const": 1
+                },
+                "ports": {
+                  "properties": {
+                    "gateway": {
+                      "const": 24768
+                    },
+                    "broker": {
+                      "const": 24769
+                    },
+                    "control": {
+                      "const": 24770
+                    },
+                    "metrics": {
+                      "const": 24771
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/cell"
+            },
+            {
+              "properties": {
+                "track": {
+                  "const": "brainstem-experimental"
+                },
+                "track_slot": {
+                  "const": 2
+                },
+                "ring": {
+                  "const": "alpha"
+                },
+                "ring_slot": {
+                  "const": 2
+                },
+                "ports": {
+                  "properties": {
+                    "gateway": {
+                      "const": 24772
+                    },
+                    "broker": {
+                      "const": 24773
+                    },
+                    "control": {
+                      "const": 24774
+                    },
+                    "metrics": {
+                      "const": 24775
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/cell"
+            },
+            {
+              "properties": {
+                "track": {
+                  "const": "brainstem-experimental"
+                },
+                "track_slot": {
+                  "const": 2
+                },
+                "ring": {
+                  "const": "beta"
+                },
+                "ring_slot": {
+                  "const": 3
+                },
+                "ports": {
+                  "properties": {
+                    "gateway": {
+                      "const": 24776
+                    },
+                    "broker": {
+                      "const": 24777
+                    },
+                    "control": {
+                      "const": 24778
+                    },
+                    "metrics": {
+                      "const": 24779
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/cell"
+            },
+            {
+              "properties": {
+                "track": {
+                  "const": "brainstem-experimental"
+                },
+                "track_slot": {
+                  "const": 2
+                },
+                "ring": {
+                  "const": "grail"
+                },
+                "ring_slot": {
+                  "const": 4
+                },
+                "ports": {
+                  "properties": {
+                    "gateway": {
+                      "const": 24780
+                    },
+                    "broker": {
+                      "const": 24781
+                    },
+                    "control": {
+                      "const": 24782
+                    },
+                    "metrics": {
+                      "const": 24783
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/cell"
+            },
+            {
+              "properties": {
+                "track": {
+                  "const": "brainstem-regular"
+                },
+                "track_slot": {
+                  "const": 3
+                },
+                "ring": {
+                  "const": "canary"
+                },
+                "ring_slot": {
+                  "const": 0
+                },
+                "ports": {
+                  "properties": {
+                    "gateway": {
+                      "const": 24796
+                    },
+                    "broker": {
+                      "const": 24797
+                    },
+                    "control": {
+                      "const": 24798
+                    },
+                    "metrics": {
+                      "const": 24799
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/cell"
+            },
+            {
+              "properties": {
+                "track": {
+                  "const": "brainstem-regular"
+                },
+                "track_slot": {
+                  "const": 3
+                },
+                "ring": {
+                  "const": "nightly"
+                },
+                "ring_slot": {
+                  "const": 1
+                },
+                "ports": {
+                  "properties": {
+                    "gateway": {
+                      "const": 24800
+                    },
+                    "broker": {
+                      "const": 24801
+                    },
+                    "control": {
+                      "const": 24802
+                    },
+                    "metrics": {
+                      "const": 24803
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/cell"
+            },
+            {
+              "properties": {
+                "track": {
+                  "const": "brainstem-regular"
+                },
+                "track_slot": {
+                  "const": 3
+                },
+                "ring": {
+                  "const": "alpha"
+                },
+                "ring_slot": {
+                  "const": 2
+                },
+                "ports": {
+                  "properties": {
+                    "gateway": {
+                      "const": 24804
+                    },
+                    "broker": {
+                      "const": 24805
+                    },
+                    "control": {
+                      "const": 24806
+                    },
+                    "metrics": {
+                      "const": 24807
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/cell"
+            },
+            {
+              "properties": {
+                "track": {
+                  "const": "brainstem-regular"
+                },
+                "track_slot": {
+                  "const": 3
+                },
+                "ring": {
+                  "const": "beta"
+                },
+                "ring_slot": {
+                  "const": 3
+                },
+                "ports": {
+                  "properties": {
+                    "gateway": {
+                      "const": 24808
+                    },
+                    "broker": {
+                      "const": 24809
+                    },
+                    "control": {
+                      "const": 24810
+                    },
+                    "metrics": {
+                      "const": 24811
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/cell"
+            },
+            {
+              "properties": {
+                "track": {
+                  "const": "brainstem-regular"
+                },
+                "track_slot": {
+                  "const": 3
+                },
+                "ring": {
+                  "const": "grail"
+                },
+                "ring_slot": {
+                  "const": 4
+                },
+                "ports": {
+                  "properties": {
+                    "gateway": {
+                      "const": 24812
+                    },
+                    "broker": {
+                      "const": 24813
+                    },
+                    "control": {
+                      "const": 24814
+                    },
+                    "metrics": {
+                      "const": 24815
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "items": false,
+      "$comment": "The semantic validator additionally requires unique cell RAPPIDs and globally distinct, non-containing cell paths."
+    }
+  },
+  "$defs": {
+    "cell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "track",
+        "track_slot",
+        "ring",
+        "ring_slot",
+        "rappid",
+        "paths",
+        "artifact",
+        "ports",
+        "probes",
+        "budgets"
+      ],
+      "properties": {
+        "track": {
+          "enum": [
+            "frontier-experimental",
+            "frontier",
+            "brainstem-experimental",
+            "brainstem-regular"
+          ]
+        },
+        "track_slot": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "ring": {
+          "enum": [
+            "canary",
+            "nightly",
+            "alpha",
+            "beta",
+            "grail"
+          ]
+        },
+        "ring_slot": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4
+        },
+        "rappid": {
+          "type": "string",
+          "pattern": "^rappid:@[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9]+(?:-[a-z0-9]+)*:[0-9a-f]{64}(?![\\s\\S])"
+        },
+        "paths": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "home",
+            "state",
+            "log",
+            "cache",
+            "tmp"
+          ],
+          "properties": {
+            "home": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^(?!/)(?!\\.\\.?(?:/|(?![\\s\\S])))(?!.*(?:^|/)\\.\\.?(?:/|(?![\\s\\S])))[A-Za-z0-9._~!$&'()+,;=@-]+(?:/[A-Za-z0-9._~!$&'()+,;=@-]+)*(?![\\s\\S])",
+              "description": "Normalized relative POSIX path using the documented ASCII path subset."
+            },
+            "state": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^(?!/)(?!\\.\\.?(?:/|(?![\\s\\S])))(?!.*(?:^|/)\\.\\.?(?:/|(?![\\s\\S])))[A-Za-z0-9._~!$&'()+,;=@-]+(?:/[A-Za-z0-9._~!$&'()+,;=@-]+)*(?![\\s\\S])",
+              "description": "Normalized relative POSIX path using the documented ASCII path subset."
+            },
+            "log": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^(?!/)(?!\\.\\.?(?:/|(?![\\s\\S])))(?!.*(?:^|/)\\.\\.?(?:/|(?![\\s\\S])))[A-Za-z0-9._~!$&'()+,;=@-]+(?:/[A-Za-z0-9._~!$&'()+,;=@-]+)*(?![\\s\\S])",
+              "description": "Normalized relative POSIX path using the documented ASCII path subset."
+            },
+            "cache": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^(?!/)(?!\\.\\.?(?:/|(?![\\s\\S])))(?!.*(?:^|/)\\.\\.?(?:/|(?![\\s\\S])))[A-Za-z0-9._~!$&'()+,;=@-]+(?:/[A-Za-z0-9._~!$&'()+,;=@-]+)*(?![\\s\\S])",
+              "description": "Normalized relative POSIX path using the documented ASCII path subset."
+            },
+            "tmp": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^(?!/)(?!\\.\\.?(?:/|(?![\\s\\S])))(?!.*(?:^|/)\\.\\.?(?:/|(?![\\s\\S])))[A-Za-z0-9._~!$&'()+,;=@-]+(?:/[A-Za-z0-9._~!$&'()+,;=@-]+)*(?![\\s\\S])",
+              "description": "Normalized relative POSIX path using the documented ASCII path subset."
+            }
+          }
+        },
+        "artifact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "digest",
+            "argv"
+          ],
+          "properties": {
+            "digest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}(?![\\s\\S])"
+            },
+            "argv": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "prefixItems": [
+                {
+                  "type": "string",
+                  "minLength": 3,
+                  "maxLength": 4096,
+                  "pattern": "^(?!/)(?!\\.\\.?(?:/|(?![\\s\\S])))(?!.*(?:^|/)\\.\\.?(?:/|(?![\\s\\S])))[A-Za-z0-9._~!$&'()+,;=@-]+(?:/[A-Za-z0-9._~!$&'()+,;=@-]+)+(?![\\s\\S])",
+                  "description": "Artifact-relative executable path using the ASCII path subset; ambient PATH lookup is forbidden."
+                }
+              ],
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096,
+                "pattern": "^[\\u0020-\\u007e]+(?![\\s\\S])",
+                "description": "One non-empty printable ASCII argument."
+              }
+            }
+          },
+          "$comment": "The semantic validator additionally limits the aggregate argv encoding to 8192 ASCII bytes."
+        },
+        "ports": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "gateway",
+            "broker",
+            "control",
+            "metrics"
+          ],
+          "properties": {
+            "gateway": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "broker": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "control": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "metrics": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            }
+          }
+        },
+        "probes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "readiness",
+            "liveness",
+            "identity",
+            "artifact"
+          ],
+          "properties": {
+            "readiness": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "endpoint",
+                "path",
+                "timeout_ms",
+                "interval_ms"
+              ],
+              "properties": {
+                "endpoint": {
+                  "enum": [
+                    "gateway",
+                    "broker",
+                    "control",
+                    "metrics"
+                  ]
+                },
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512,
+                  "pattern": "^/(?!/)(?!.*//)(?!\\.\\.?(?:/|(?![\\s\\S])))(?!.*(?:^|/)\\.\\.?(?:/|(?![\\s\\S])))[A-Za-z0-9._~/-]+(?![\\s\\S])"
+                },
+                "timeout_ms": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 60000
+                },
+                "interval_ms": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600000
+                }
+              },
+              "$comment": "The semantic validator additionally requires timeout_ms <= interval_ms and timeout_ms <= the cell probe_timeout_ms budget."
+            },
+            "liveness": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "endpoint",
+                "path",
+                "timeout_ms",
+                "interval_ms"
+              ],
+              "properties": {
+                "endpoint": {
+                  "enum": [
+                    "gateway",
+                    "broker",
+                    "control",
+                    "metrics"
+                  ]
+                },
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512,
+                  "pattern": "^/(?!/)(?!.*//)(?!\\.\\.?(?:/|(?![\\s\\S])))(?!.*(?:^|/)\\.\\.?(?:/|(?![\\s\\S])))[A-Za-z0-9._~/-]+(?![\\s\\S])"
+                },
+                "timeout_ms": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 60000
+                },
+                "interval_ms": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600000
+                }
+              },
+              "$comment": "The semantic validator additionally requires timeout_ms <= interval_ms and timeout_ms <= the cell probe_timeout_ms budget."
+            },
+            "identity": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "endpoint",
+                "path",
+                "timeout_ms",
+                "expected_rappid"
+              ],
+              "properties": {
+                "endpoint": {
+                  "enum": [
+                    "gateway",
+                    "broker",
+                    "control",
+                    "metrics"
+                  ]
+                },
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512,
+                  "pattern": "^/(?!/)(?!.*//)(?!\\.\\.?(?:/|(?![\\s\\S])))(?!.*(?:^|/)\\.\\.?(?:/|(?![\\s\\S])))[A-Za-z0-9._~/-]+(?![\\s\\S])"
+                },
+                "timeout_ms": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 60000
+                },
+                "expected_rappid": {
+                  "type": "string",
+                  "pattern": "^rappid:@[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9]+(?:-[a-z0-9]+)*:[0-9a-f]{64}(?![\\s\\S])"
+                }
+              },
+              "$comment": "The semantic validator additionally requires timeout_ms <= the cell probe_timeout_ms budget and the expected value to equal the cell value."
+            },
+            "artifact": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "endpoint",
+                "path",
+                "timeout_ms",
+                "expected_digest"
+              ],
+              "properties": {
+                "endpoint": {
+                  "enum": [
+                    "gateway",
+                    "broker",
+                    "control",
+                    "metrics"
+                  ]
+                },
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512,
+                  "pattern": "^/(?!/)(?!.*//)(?!\\.\\.?(?:/|(?![\\s\\S])))(?!.*(?:^|/)\\.\\.?(?:/|(?![\\s\\S])))[A-Za-z0-9._~/-]+(?![\\s\\S])"
+                },
+                "timeout_ms": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 60000
+                },
+                "expected_digest": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}(?![\\s\\S])"
+                }
+              },
+              "$comment": "The semantic validator additionally requires timeout_ms <= the cell probe_timeout_ms budget and the expected value to equal the cell value."
+            }
+          }
+        },
+        "budgets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cpu_millis",
+            "memory_bytes",
+            "storage_bytes",
+            "startup_timeout_ms",
+            "probe_timeout_ms",
+            "shutdown_timeout_ms",
+            "job_timeout_ms"
+          ],
+          "properties": {
+            "cpu_millis": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64000
+            },
+            "memory_bytes": {
+              "type": "integer",
+              "minimum": 1048576,
+              "maximum": 1099511627776
+            },
+            "storage_bytes": {
+              "type": "integer",
+              "minimum": 1048576,
+              "maximum": 17592186044416
+            },
+            "startup_timeout_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 600000
+            },
+            "probe_timeout_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60000
+            },
+            "shutdown_timeout_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 120000
+            },
+            "job_timeout_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 86400000
+            }
+          },
+          "$comment": "The semantic validator additionally requires startup, probe, and shutdown timeouts to be no greater than job_timeout_ms."
+        }
+      },
+      "$comment": "The semantic validator binds identity/artifact probe expectations to this cell, bounds every probe by probe_timeout_ms, bounds lifecycle timeouts by job_timeout_ms, and enforces the aggregate argv byte limit."
+    }
+  },
+  "$comment": "Draft 2020-12 cannot express the required cross-cell uniqueness, cross-field equality and relative numeric bounds, path non-overlap, aggregate argv byte limit, or exact integer scalar-origin checks. JSON Schema validation alone is insufficient.",
+  "x-rapp-semantic-validator": {
+    "required": true,
+    "api": "rapp_sdk.check_ring_yard_manifest_semantics",
+    "bytes_api": "rapp_sdk.check_ring_yard_manifest"
+  }
+}

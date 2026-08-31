@@ -19,6 +19,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = ROOT / "src" / "rapp_sdk" / "schemas" / (
     "rapp-spec-revision-v1.schema.json"
 )
+RING_SCHEMA = ROOT / "src" / "rapp_sdk" / "schemas" / (
+    "rapp-ring-yard-v1.schema.json"
+)
 WORK = ROOT / ".distribution-smoke"
 PINNED_SETUPTOOLS_VERSION = "84.0.0"
 
@@ -38,6 +41,7 @@ import rapp_sdk
 from rapp_sdk import (
     AuthorityCheckpoint,
     KindFamilyRegistry,
+    RING_YARD_MANIFEST_SCHEMA_ID,
     SPEC_REVISION_SCHEMA_ID,
     SpecChain,
     SpecResolutionError,
@@ -45,9 +49,12 @@ from rapp_sdk import (
     StreamTrustPolicy,
     VerifiedFrame,
     build_frame_mapping,
+    build_default_ring_yard_manifest,
     build_spec_revision_frame,
     canonicalize,
     check_frame,
+    check_ring_yard_manifest_semantics,
+    read_ring_yard_manifest_schema,
     read_spec_revision_schema,
     selected_authority_checkpoint,
     selected_authority_registry,
@@ -65,6 +72,24 @@ assert read_spec_revision_schema() == source
 assert hashlib.sha256(installed).hexdigest() == sys.argv[2]
 assert json.loads(installed)["$id"] == SPEC_REVISION_SCHEMA_ID
 assert SPEC_REVISION_SCHEMA_ID == "urn:rapp:schema:spec-revision:1"
+ring_source = Path(sys.argv[3]).read_bytes()
+ring_resource = files("rapp_sdk").joinpath(
+    "schemas/rapp-ring-yard-v1.schema.json"
+)
+assert ring_resource.is_file(), ring_resource
+ring_installed = ring_resource.read_bytes()
+assert ring_installed == ring_source
+assert read_ring_yard_manifest_schema() == ring_source
+assert hashlib.sha256(ring_installed).hexdigest() == sys.argv[4]
+assert json.loads(ring_installed)["$id"] == RING_YARD_MANIFEST_SCHEMA_ID
+assert json.loads(ring_installed)["x-rapp-semantic-validator"] == {
+    "required": True,
+    "api": "rapp_sdk.check_ring_yard_manifest_semantics",
+    "bytes_api": "rapp_sdk.check_ring_yard_manifest",
+}
+assert RING_YARD_MANIFEST_SCHEMA_ID == (
+    "urn:rapp:schema:ring-yard-manifest:1"
+)
 authority_resource = files("rapp_sdk").joinpath(
     "authority/selected-rev14.json"
 )
@@ -77,7 +102,7 @@ assert selected_authority_registry().checkpoint is selected_checkpoint
 assert selected_authority_trust_policy().checkpoint is selected_checkpoint
 distribution = importlib.metadata.distribution("rapp-sdk")
 assert distribution.version == rapp_sdk.__version__
-environment_root = Path(sys.argv[4]).resolve()
+environment_root = Path(sys.argv[6]).resolve()
 assert Path(rapp_sdk.__file__).resolve().is_relative_to(environment_root)
 assert Path(distribution.locate_file("")).resolve().is_relative_to(
     environment_root
@@ -86,11 +111,47 @@ example = Path(sys.prefix) / "share" / "rapp-sdk" / "examples" / (
     "spec_chain_smoke.py"
 )
 assert example.is_file(), example
-assert example.read_bytes() == Path(sys.argv[3]).read_bytes()
+assert example.read_bytes() == Path(sys.argv[5]).read_bytes()
+ring_doc = Path(sys.prefix) / "share" / "rapp-sdk" / "docs" / (
+    "ring-yard-manifest.md"
+)
+assert ring_doc.is_file(), ring_doc
 output = io.StringIO()
 with redirect_stdout(output):
     runpy.run_path(str(example), run_name="__main__")
 assert "rev-2 seq=1" in output.getvalue()
+
+tracks = (
+    "frontier-experimental",
+    "frontier",
+    "brainstem-experimental",
+    "brainstem-regular",
+)
+rings = ("canary", "nightly", "alpha", "beta", "grail")
+rappids = {
+    (track, ring): f"rappid:@example/distribution-cell:{index:064x}"
+    for index, (track, ring) in enumerate(
+        (track, ring)
+        for track in tracks
+        for ring in rings
+    )
+}
+yard = build_default_ring_yard_manifest(
+    yard_identity="distribution-yard",
+    yard_root="/srv/rapp-ring-yard",
+    artifact_digest="sha256:" + "a" * 64,
+    argv=("bin/rapp-cell",),
+    rappids=rappids,
+)
+assert len(yard.cells) == 20
+assert yard.peer_job_count == 380
+assert yard.self_test_count == 20
+assert yard.planned_job_count == 400
+assert type(yard).from_json_bytes(yard.to_json_bytes()) == yard
+assert check_ring_yard_manifest_semantics(yard.as_dict()).require() == yard
+invalid_numeric_yard = yard.as_dict()
+invalid_numeric_yard["cells"][0]["track_slot"] = 0.0
+assert not check_ring_yard_manifest_semantics(invalid_numeric_yard).ok
 
 
 def checkpoint(*frames):
@@ -479,6 +540,7 @@ def main(arguments: list[str] | None = None) -> int:
         return 2
 
     source_hash = hashlib.sha256(SCHEMA.read_bytes()).hexdigest()
+    ring_source_hash = hashlib.sha256(RING_SCHEMA.read_bytes()).hexdigest()
     shutil.rmtree(WORK, ignore_errors=True)
     try:
         temporary = WORK / "tmp"
@@ -530,12 +592,14 @@ def main(arguments: list[str] | None = None) -> int:
                     PROBE,
                     str(SCHEMA),
                     source_hash,
+                    str(RING_SCHEMA),
+                    ring_source_hash,
                     str(ROOT / "examples" / "spec_chain_smoke.py"),
                     str(isolated),
                 ],
                 environment=environment,
             )
-            print(f"{kind}: installed API, example, and resources verified")
+            print(f"{kind}: installed API, example, docs, and resources verified")
     finally:
         shutil.rmtree(WORK, ignore_errors=True)
     return 0

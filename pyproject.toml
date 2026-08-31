@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "rapp-sdk"
 version = "0.1.0"
-description = "Protocol and specification-chain primitives for RAPP SDK clients"
+description = "Protocol, specification-chain, and ring-yard primitives for RAPP SDK clients"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -45,6 +45,6 @@ rapp_sdk = ["py.typed"]
 
 [tool.setuptools.data-files]
 "share/rapp-sdk" = ["DISCLAIMER.md", "THIRD_PARTY_NOTICES.md"]
-"share/rapp-sdk/docs" = ["docs/spec-chain.md"]
+"share/rapp-sdk/docs" = ["docs/spec-chain.md", "docs/ring-yard-manifest.md"]
 "share/rapp-sdk/examples" = ["examples/spec_chain_smoke.py"]
 "share/rapp-sdk/licenses" = ["LICENSES/Apache-2.0.txt"]

@@ -30,7 +30,10 @@ from rapp_sdk import (
     PersistedHead,
     ProtocolError,
     RappSDKError,
+    RING_YARD_MANIFEST_SCHEMA_ID,
     RevisionAddress,
+    RingManifestError,
+    RingYardManifest,
     SPEC_REVISION_SCHEMA_ID,
     SpecChain,
     SpecChainError,
@@ -42,16 +45,22 @@ from rapp_sdk import (
     VerifiedFrame,
     VerifiedStream,
     build_frame_mapping,
+    build_default_ring_yard_manifest,
     build_spec_revision_frame,
     canonicalize,
     check_frame,
+    check_ring_yard_manifest,
+    check_ring_yard_manifest_semantics,
     check_stream,
+    ports_for_cell,
+    read_ring_yard_manifest_schema,
     read_spec_revision_schema,
     selected_authority_checkpoint,
     selected_authority_registry,
     selected_authority_trust_policy,
     strict_json_loads,
     verify_frame,
+    verify_ring_yard_manifest,
     verify_stream,
 )
 
@@ -68,8 +77,11 @@ ROOT_EXPORTS = (
     "PersistedHead",
     "ProtocolError",
     "RappSDKError",
+    "RING_YARD_MANIFEST_SCHEMA_ID",
     "RevisionAddress",
     "RevisionSource",
+    "RingManifestError",
+    "RingYardManifest",
     "SPEC_REVISION_SCHEMA_ID",
     "SpecChain",
     "SpecChainError",
@@ -84,16 +96,22 @@ ROOT_EXPORTS = (
     "__version__",
     "__version_info__",
     "build_frame_mapping",
+    "build_default_ring_yard_manifest",
     "build_spec_revision_frame",
     "canonicalize",
     "check_frame",
+    "check_ring_yard_manifest",
+    "check_ring_yard_manifest_semantics",
     "check_stream",
+    "ports_for_cell",
+    "read_ring_yard_manifest_schema",
     "read_spec_revision_schema",
     "selected_authority_checkpoint",
     "selected_authority_registry",
     "selected_authority_trust_policy",
     "strict_json_loads",
     "verify_frame",
+    "verify_ring_yard_manifest",
     "verify_stream",
 )
 
@@ -188,13 +206,13 @@ class PublicAPITests(unittest.TestCase):
 
     def test_diagnostic_code_catalog_is_stable(self) -> None:
         self.assertEqual(DIAGNOSTIC_CATALOG_VERSION, "1")
-        self.assertEqual(len(DIAGNOSTIC_CODES), 105)
+        self.assertEqual(len(DIAGNOSTIC_CODES), 122)
         self.assertEqual(DIAGNOSTIC_CODES, tuple(sorted(DIAGNOSTIC_CODES)))
         self.assertEqual(
             hashlib.sha256(
                 ("\n".join(DIAGNOSTIC_CODES) + "\n").encode()
             ).hexdigest(),
-            "10856cdc195d0e4dc52d9ffd1fb4f714ca4790a034e3cf56ea0af8206a7e0148",
+            "855f36add3e56d913f2a441fcd56806cbd170a340236152a2721be161e2e3365",
         )
 
     def test_golden_callables_are_fully_annotated(self) -> None:
@@ -205,12 +223,18 @@ class PublicAPITests(unittest.TestCase):
             canonicalize,
             strict_json_loads,
             build_frame_mapping,
+            ports_for_cell,
+            build_default_ring_yard_manifest,
+            check_ring_yard_manifest,
+            check_ring_yard_manifest_semantics,
+            verify_ring_yard_manifest,
             check_frame,
             verify_frame,
             check_stream,
             verify_stream,
             build_spec_revision_frame,
             read_spec_revision_schema,
+            read_ring_yard_manifest_schema,
             selected_authority_checkpoint,
             selected_authority_registry,
             selected_authority_trust_policy,
@@ -220,6 +244,8 @@ class PublicAPITests(unittest.TestCase):
             SpecChain.from_jsonl_local,
             SpecChain.resolve,
             SpecResolver.read,
+            RingYardManifest.from_json_bytes,
+            RingYardManifest.to_json_bytes,
         )
         for function in callables:
             with self.subTest(function=function.__qualname__):
@@ -269,6 +295,32 @@ class PublicAPITests(unittest.TestCase):
                 "prev_wave: 'str | None' = None, sig: 'str | None' = None) "
                 "-> 'Frame'"
             ),
+            ports_for_cell: (
+                "(*, track_slot: 'int', ring_slot: 'int') -> 'CellPorts'"
+            ),
+            build_default_ring_yard_manifest: (
+                "(*, yard_identity: 'str', yard_root: 'str', "
+                "artifact_digest: 'str', argv: 'Sequence[str]', "
+                "rappids: 'Mapping[CellKey, str] | None' = None, "
+                "mint_rappid: 'MintRappid | None' = None, "
+                "scheduler: 'SchedulerPolicy | None' = None, "
+                "budgets: 'ResourceBudgets | None' = None) -> "
+                "'RingYardManifest'"
+            ),
+            check_ring_yard_manifest: (
+                "(data: 'bytes | bytearray | memoryview', *, "
+                "max_bytes: 'int' = 524288) -> "
+                "'VerificationReport[RingYardManifest]'"
+            ),
+            check_ring_yard_manifest_semantics: (
+                "(document: 'Mapping[str, JsonValue]', *, "
+                "max_bytes: 'int' = 524288) -> "
+                "'VerificationReport[RingYardManifest]'"
+            ),
+            verify_ring_yard_manifest: (
+                "(data: 'bytes | bytearray | memoryview', *, "
+                "max_bytes: 'int' = 524288) -> 'RingYardManifest'"
+            ),
             check_frame: (
                 "(frame: 'FrameMapping', *, registry: 'KindFamilyRegistry', "
                 "head: 'VerifiedFrame | None' = None, "
@@ -304,6 +356,13 @@ class PublicAPITests(unittest.TestCase):
                 "None, cache: 'ContentAddressedCache | None' = None) -> 'None'"
             ),
             SpecResolver.read: "(self, revision: 'SpecRevision') -> 'bytes'",
+            RingYardManifest.from_json_bytes: (
+                "(data: 'bytes | bytearray | memoryview', *, "
+                "max_bytes: 'int' = 524288) -> 'RingYardManifest'"
+            ),
+            RingYardManifest.to_json_bytes: (
+                "(self, *, max_bytes: 'int' = 524288) -> 'bytes'"
+            ),
         }
         for function, expected in snapshots.items():
             with self.subTest(function=function.__qualname__):
@@ -390,6 +449,12 @@ class PublicAPITests(unittest.TestCase):
                 "is_inline",
                 "frame",
             ),
+            RingYardManifest: (
+                "spec",
+                "yard",
+                "control_plane",
+                "cells",
+            ),
         }
         for model, expected in snapshots.items():
             with self.subTest(model=model.__name__):
@@ -414,6 +479,28 @@ class PublicAPITests(unittest.TestCase):
         self.assertEqual(
             json.loads(source_bytes)["$id"],
             SPEC_REVISION_SCHEMA_ID,
+        )
+        ring_resource = files("rapp_sdk").joinpath(
+            "schemas/rapp-ring-yard-v1.schema.json"
+        )
+        self.assertTrue(ring_resource.is_file())
+        ring_bytes = ring_resource.read_bytes()
+        self.assertEqual(read_ring_yard_manifest_schema(), ring_bytes)
+        self.assertEqual(
+            hashlib.sha256(ring_bytes).hexdigest(),
+            "c8e59626c05ee4a0733729d4ec0334ca65cfab875325af1fea2040c600829cf2",
+        )
+        self.assertEqual(
+            json.loads(ring_bytes)["$id"],
+            RING_YARD_MANIFEST_SCHEMA_ID,
+        )
+        self.assertEqual(
+            json.loads(ring_bytes)["x-rapp-semantic-validator"],
+            {
+                "required": True,
+                "api": "rapp_sdk.check_ring_yard_manifest_semantics",
+                "bytes_api": "rapp_sdk.check_ring_yard_manifest",
+            },
         )
 
     def test_selected_authority_is_checkpoint_derived(self) -> None:
@@ -543,6 +630,8 @@ class PublicAPITests(unittest.TestCase):
         self.assertFalse(issubclass(SpecChainError, ProtocolError))
         self.assertTrue(issubclass(SpecResolutionError, SpecChainError))
         self.assertTrue(issubclass(CacheIntegrityError, SpecResolutionError))
+        self.assertTrue(issubclass(RingManifestError, RappSDKError))
+        self.assertFalse(issubclass(RingManifestError, ProtocolError))
 
     def test_import_is_quiet_and_has_no_filesystem_side_effects(self) -> None:
         scratch = ROOT / "tests" / ".scratch-import"
