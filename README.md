@@ -76,6 +76,7 @@ Mandatory release gates:
 ```console
 python3 -m unittest discover -v
 python3 tests/schema_validator_smoke.py
+PYTHONPATH=src python3 tests/doctest_smoke.py
 python3 -m build --no-isolation --outdir .build-artifacts
 python3 tests/distribution_install_smoke.py \
   .build-artifacts/rapp_sdk-0.1.0-py3-none-any.whl \

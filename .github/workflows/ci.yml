@@ -37,6 +37,8 @@ jobs:
         run: python -m unittest discover -v
       - name: Verify schema/runtime parity
         run: python tests/schema_validator_smoke.py
+      - name: Verify public examples
+        run: python tests/doctest_smoke.py
       - name: Compile all shipped Python
         run: python -m compileall -q src tests examples
 
