@@ -1,5 +1,9 @@
 # RAPP SDK
 
+<!-- rapp1:network-header:start -->
+[![RAPP/1](https://kody-w.github.io/rapp-hive-public/portfolio/badges/rapp-sdk.svg)](https://github.com/kody-w/rapp-hive-public/blob/main/portfolio/repos/rapp-sdk.md) · **New to RAPP?** [Start here: get your Brainstem →](https://github.com/kody-w/rapp-installer#start-here)
+<!-- rapp1:network-header:end -->
+
 > The RAPP SDK is the developer surface for building agents, twins, and integrations on the RAPP platform.
 
 Write a `*_agent.py`, ship a `.twin/`, or embed the Brainstem — the SDK is the front door.
