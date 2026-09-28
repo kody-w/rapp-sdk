@@ -43,6 +43,12 @@ verifies, packs, reads, and addresses normative `rapp/1-egg` organism project
 cells. Storage, locking, and Markdown projections remain application concerns
 implemented by the `rapp-projects` reference application.
 
+`verify_project_stream(frames, stream_id, max_seconds=...)` bounds the
+wall-clock time spent verifying, like `verify_stream_local` (default
+`DEFAULT_VERIFY_SECONDS`, 5 s). Keep the default for frames received from
+others. A store re-verifying its own on-disk chain on a heavily loaded machine
+may grant more, because the bound is wall-clock time, not CPU time.
+
 ## RAPP Cell
 
 Every project egg may be described as a **RAPP Cell**: it mutates only by

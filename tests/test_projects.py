@@ -91,6 +91,32 @@ class ProjectProtocolTests(unittest.TestCase):
         verified = verify_project_stream([first, second], stream)
         self.assertEqual(verified.head.seq, 1)
 
+    def test_project_stream_verification_honours_its_time_budget(self) -> None:
+        stream = build_project_rappid("example", "budget", b"seed")
+        genesis = build_project_frame(
+            "project.genesis",
+            stream,
+            0,
+            "2026-08-31T00:00:00.000Z",
+            {
+                "project": "budget",
+                "title": "Budget",
+                "goal": "Test",
+                "owner": "example",
+                "origin": "test",
+                "visibility": "local",
+            },
+            None,
+        )
+        self.assertEqual(
+            verify_project_stream([genesis], stream, max_seconds=60.0).head.seq, 0
+        )
+        with self.assertRaises(Exception) as caught:
+            verify_project_stream([genesis], stream, max_seconds=0.0)
+        self.assertIn("verification-time-exceeded", str(caught.exception))
+        with self.assertRaises(ValueError):
+            verify_project_stream([genesis], stream, max_seconds=-1.0)
+
     def test_unknown_kind_is_refused(self) -> None:
         with self.assertRaises(ProjectProtocolError):
             build_project_frame(

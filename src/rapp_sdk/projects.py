@@ -13,6 +13,7 @@ from typing import Mapping
 
 from .errors import ProjectProtocolError
 from .protocol import (
+    DEFAULT_VERIFY_SECONDS,
     Frame,
     FrameMapping,
     JsonObject,
@@ -570,7 +571,16 @@ def project_kind_registry(
 def verify_project_stream(
     frames: list[FrameMapping] | tuple[FrameMapping, ...],
     expected_stream_id: str,
+    *,
+    max_seconds: float = DEFAULT_VERIFY_SECONDS,
 ) -> VerifiedStream:
+    """Verify a complete local project stream.
+
+    ``max_seconds`` bounds the wall-clock time spent verifying, as in
+    ``verify_stream_local``. Keep the default for frames received from others;
+    a store re-verifying its own on-disk chain on a heavily loaded machine may
+    grant more, because the bound is wall-clock time, not CPU time.
+    """
     if not frames:
         raise _error(
             "empty-project-stream",
@@ -582,6 +592,7 @@ def verify_project_stream(
             frames,
             registry=registry,
             expected_stream_id=expected_stream_id,
+            max_seconds=max_seconds,
         )
     except Exception as exc:
         if isinstance(exc, ProjectProtocolError):
